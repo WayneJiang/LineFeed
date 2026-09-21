@@ -35,6 +35,21 @@ class AndroidLibraryConventionPlugin : Plugin<Project> {
             // this only suppresses the false positive for empty/no-test modules. See docs/NOTES.md.
             tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
                 failOnNoDiscoveredTests.set(false)
+
+                // Robolectric (SDK 36's `android-all-instrumented`) reflects into JDK-internal
+                // `java.io.FileDescriptor`/`java.lang` internals to shadow things like
+                // `ApplicationSharedMemory`. On JDK 17+'s stricter module system (this machine runs
+                // JDK 21) that reflection is blocked by default and fails with "Failed to interact
+                // with raw FileDescriptor internals; perhaps JRE has changed?". These `--add-opens`
+                // are Robolectric's own documented workaround for running on JDK 17+.
+                jvmArgs(
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+                )
             }
         }
     }

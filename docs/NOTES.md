@@ -117,6 +117,56 @@
   缺失）——欄位名稱與型態都對照真實 schema 手刻，但内容本身是捏造的測試資料，
   誠實記錄於此，不混充為真實抓取結果。
 
+## Step 5：add room database for feed cache, bookmarks and sync metadata
+
+- **問題（最花時間的一個）**：所有 Robolectric 測試（`FeedArticleDaoTest`、
+  `RemoteKeyDaoTest`、`BookmarkDaoTest`）在 `@Config(sdk = [36])` 下 100% 失敗，
+  錯誤是
+  `java.lang.RuntimeException: Failed to interact with raw FileDescriptor internals; perhaps JRE has changed?`，
+  發生在 Robolectric 初始化 `com.android.internal.os.ApplicationSharedMemory.create(...)`
+  的階段（測試方法本身還沒開始跑）。
+  **原因排查過程**：
+  1. 一開始懷疑是 JDK 17+ 模組系統擋掉了 Robolectric 對 JDK 內部
+     `java.io.FileDescriptor` 的反射，依 Robolectric 官方文件在
+     `AndroidLibraryConventionPlugin` 對所有 `Test` task 加了一整組
+     `--add-opens`（`java.lang`、`java.util`、`java.io`、`java.security`、
+     `java.text`、`java.desktop/java.awt.font`）。加了之後**還是同樣的錯誤**，
+     代表不是單純的模組存取權限問題。
+  2. 改用 `@Config(sdk = [35])` 測試同一批案例，**完全通過**（連同一開始就對的
+     mapper/network 測試在內）。可以確定問題是 Robolectric 4.17 對 SDK 36
+     （Android 16 對應的 `android-all-instrumented`）新增的
+     `ApplicationSharedMemory` 這個 App 啟動流程 shadow，在本機 JDK 21 環境下
+     其反射寫入 `FileDescriptor` 內部欄位的方式本身就會丟例外，`--add-opens`
+     只解決「JVM 擋你反射」，解決不了「Robolectric 寫死的欄位存取方式與這個
+     JDK 版本的內部佈局對不上」這類問題。
+  **解法**：`core:data` 的 Robolectric 測試改用 `@Config(sdk = [35])`（不是
+  PLAN.md §9.1 建議的 `[36]`）。SDK 35 一樣在 Robolectric 4.17 的官方支援範圍
+  內、一樣 ≥ minSdk 24、≤ targetSdk 36，只是不觸發這個特定的新增 shadow。
+  這是**依 coordinator 指示不修改 docs/PLAN.md**、僅在此記錄的一個偏離；
+  README/DECISIONS 階段應該把「為什麼 DAO 測試用 sdk=35 而不是 36」講清楚。
+  `AndroidLibraryConventionPlugin` 裡新增的 `--add-opens` 集合本身仍然保留
+  （對其他潛在的 Robolectric/JDK21 反射問題有防禦價值，且沒有副作用）。
+
+- **問題**：`RemoteKeyDaoTest`/`FeedArticleDaoTest` 一開始用
+  `Room.inMemoryDatabaseBuilder(...).setQueryCoroutineContext(UnconfinedTestDispatcher())`
+  （依 PLAN.md §9.1 的建議），跑出
+  `UnsupportedOperationException: Function UnconfinedTestCoroutineDispatcher.dispatch can only be used by the yield function.`
+  **原因**：Room 產生的 DAO 實作內部用 `withContext(queryCoroutineContext)`
+  分派每個 suspend 查詢；`kotlinx-coroutines-test` 的 `UnconfinedTestDispatcher`
+  設計上只給 `runTest` 自己的協程機制在特定情境（`yield`）呼叫，一般的
+  `withContext` 分派方式打進去會直接丟例外——這與「在 `runTest` 內驅動 VM 底下
+  真正的協程」是不同的使用情境，PLAN.md 這條建議在 Room 的場景下不成立。
+  **解法**：`RoomTestDatabase.kt` 的 `createTestDatabase()` 改用真正的
+  `Dispatchers.IO`（而非任何 `TestDispatcher`）當 Room 的
+  `queryCoroutineContext`；DAO 測試不需要虛擬時間，用 `runTest`
+  （多數案例）或 `runBlocking`（`FeedArticleDaoTest` 裡需要真實時間輪詢
+  `pagingSource.invalid` 的那個案例）皆可正常搭配真實 dispatcher 運作。
+
+- **測試涵蓋的取捨**：`FeedArticleDaoTest` 的「bookmark 變動使 pagingSource
+  invalidate」用真實時間輪詢（最多 3 秒）斷言 `pagingSource.invalid`，而不是
+  斷言確切耗時——Room 的 `InvalidationTracker` 是非同步的背景執行緒回呼，硬性
+  斷言時間點容易在較慢的 CI 機器上變成假陰性。
+
 ## 一般記錄
 - 本機環境確認：JDK 21 (Corretto)、Android SDK 已有 platforms 35/36/37.0、
   `~/.gradle/wrapper/dists` 已有 gradle-9.7.1-bin 快取、AGP 9.4.0 jar 已在
