@@ -4,10 +4,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.waynejiang.linefeed.core.data.database.LineFeedDatabase
 import com.waynejiang.linefeed.core.data.database.createTestDatabase
 import com.waynejiang.linefeed.core.data.database.entity.RemoteKeyEntity
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,24 +32,24 @@ class RemoteKeyDaoTest {
     }
 
     @Test
-    fun `get returns null when absent`() = runTest {
+    fun `get returns null when no key stored`() = runBlocking {
         assertNull(dao.get(RemoteKeyEntity.ARTICLES_FEED))
     }
 
     @Test
-    fun `upsert then get round-trips, and upsert replaces the previous value`() = runTest {
-        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, nextCursorPublishedAtMillis = 100, endOfPaginationReached = false, updatedAtMillis = 1))
-        assertEquals(100L, dao.get(RemoteKeyEntity.ARTICLES_FEED)?.nextCursorPublishedAtMillis)
+    fun `upsert inserts then updates the same feed row`() = runBlocking {
+        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, 1_000L, endOfPaginationReached = false, updatedAtMillis = 1L))
+        assertEquals(1_000L, dao.get(RemoteKeyEntity.ARTICLES_FEED)?.nextCursorPublishedAtMillis)
 
-        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, nextCursorPublishedAtMillis = 50, endOfPaginationReached = true, updatedAtMillis = 2))
+        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, 500L, endOfPaginationReached = true, updatedAtMillis = 2L))
         val updated = dao.get(RemoteKeyEntity.ARTICLES_FEED)
-        assertEquals(50L, updated?.nextCursorPublishedAtMillis)
-        assertEquals(true, updated?.endOfPaginationReached)
+        assertEquals(500L, updated?.nextCursorPublishedAtMillis)
+        assertTrue(updated?.endOfPaginationReached == true)
     }
 
     @Test
-    fun `clear removes the row`() = runTest {
-        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, nextCursorPublishedAtMillis = 100, endOfPaginationReached = false, updatedAtMillis = 1))
+    fun `clear removes the row for a feed`() = runBlocking {
+        dao.upsert(RemoteKeyEntity(RemoteKeyEntity.ARTICLES_FEED, 1_000L, endOfPaginationReached = false, updatedAtMillis = 1L))
         dao.clear(RemoteKeyEntity.ARTICLES_FEED)
         assertNull(dao.get(RemoteKeyEntity.ARTICLES_FEED))
     }

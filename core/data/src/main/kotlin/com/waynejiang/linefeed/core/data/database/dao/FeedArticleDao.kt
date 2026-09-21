@@ -7,6 +7,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.waynejiang.linefeed.core.data.database.entity.FeedArticleEntity
 import com.waynejiang.linefeed.core.data.database.entity.FeedArticleWithBookmark
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FeedArticleDao {
@@ -19,6 +20,17 @@ interface FeedArticleDao {
         """,
     )
     fun pagingSource(): PagingSource<Int, FeedArticleWithBookmark>
+
+    /** Backs `ArticleRepository.observeArticle(id)` (used by the detail screen). */
+    @Query(
+        """
+        SELECT f.*, (b.articleId IS NOT NULL) AS isBookmarked
+        FROM feed_articles f
+        LEFT JOIN bookmarks b ON b.articleId = f.id
+        WHERE f.id = :id
+        """,
+    )
+    fun observeById(id: Long): Flow<FeedArticleWithBookmark?>
 
     @Query("SELECT * FROM feed_articles WHERE id = :id")
     suspend fun findById(id: Long): FeedArticleEntity?

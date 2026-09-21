@@ -174,3 +174,33 @@
 - `gradlew` / `gradlew.bat` / `gradle/wrapper/gradle-wrapper.jar` 從
   `~/Github/MyPoke`（同版本 9.7.1）複製後改寫 `gradle-wrapper.properties`，
   未使用官方 `gradle wrapper` 指令重新產生（效果相同，皆為 9.7.1 bin distribution）。
+
+## Step 6：add paging 3 remote mediator with keyset append for articles
+
+- **發現**：Step 3~5 的 commit 其實已經把 PLAN.md v2 §6 要求的 domain/data 調整（`FeedArticle`、
+  `ArticleRepository.feedPagingData()`、`feed_articles.sortIndex`、`remote_keys` 表與
+  `RemoteKeyDao`、`FeedArticleDao.pagingSource()`/`insertAll(IGNORE)`/`maxSortIndex`/`clearAll`、
+  `ArticleMappers.toEntity(sortIndex, fetchedAt)`）直接做好了，不是「先寫 v1 keyset 手寫分頁再改」。
+  本步驟因此只需要新增 `ArticleRemoteMediator`、`OfflineFirstArticleRepository`、
+  `SystemAppClock` 與對應測試，PLAN.md 表格中「調整」那段對本專案是 no-op。
+- **問題**：`OfflineFirstArticleRepository`（public class）建構子直接持有 `internal class
+  ArticleRemoteMediator` 型別參數，Kotlin 編譯報
+  `'public' function exposes its 'internal' parameter type`。
+  **解法**：`OfflineFirstArticleRepository` 保留 public class（實作 public 的
+  `ArticleRepository` interface），但建構子本身標成 `internal constructor`——外部只透過
+  `ArticleRepository` 介面使用它，建構子不需要對外可見，測試與 Hilt 綁定都在 `core:data`
+  模組內即可存取。
+- **偏離 PLAN.md**：Step 6 表格寫「`SystemAppClock` 與相關 Hilt 綁定」，但 `AppClock`／
+  `ArticleRepository` 的 `@Binds` 綁定需要 `NetworkMonitor` 的真正實作
+  （`ConnectivityNetworkMonitor`）才能讓 Hilt 圖完整可解析，而 `ConnectivityNetworkMonitor`
+  依 PLAN.md 排在 Step 7。本步驟只新增 `SystemAppClock` 類別本身（`@Inject constructor`），
+  尚未加入任何 `@Binds`／`DataModule`；`AppClock`、`ArticleRepository`、`NetworkMonitor` 的
+  Hilt 綁定改到 Step 7 的 `DataModule` 一次到位，與 Weather/ServiceCard repository 綁定一起
+  加，避免出現「模組已建立但綁定不完整」的中間態。已同步在 PLAN.md §10 Step 6/7 加註。
+- **測試涵蓋**：新增 `ArticleRemoteMediatorTest`（initialize 依 FreshnessPolicy 決定 launch/skip、
+  離線一律 skip、REFRESH 清空重建＋游標寫入、REFRESH 回傳空頁即結束分頁、APPEND 在無
+  remote key 時不打網路、APPEND 沿用游標並延續 sortIndex、APPEND 無新 id 即結束分頁且不重複
+  寫入、結束分頁後 APPEND 不再打網路、PREPEND 直接視為結束、載入失敗回傳
+  `MediatorResult.Error` 並寫入 `sync_metadata` 的 `lastError`）、
+  `OfflineFirstArticleRepositoryTest`（`asSnapshot()` 驗證排序與收藏聯集、`observeArticle`
+  以 Turbine 驗證「先 null 後有值」）、`RemoteKeyDaoTest`（get/upsert/clear）。
