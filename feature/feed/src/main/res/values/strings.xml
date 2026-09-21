@@ -1,0 +1,33 @@
+<resources>
+    <string name="feed_title">Reading</string>
+    <string name="feed_nav_saved">Saved</string>
+    <string name="feed_nav_reading">Reading</string>
+
+    <string name="feed_offline_title">You\'re offline</string>
+    <string name="feed_offline_body">Can\'t load the latest articles right now.</string>
+    <string name="feed_offline_action">Go to Saved</string>
+
+    <string name="feed_error_title">Something went wrong</string>
+    <string name="feed_error_body_offline">Check your connection and try again.</string>
+    <string name="feed_error_body_timeout">The request timed out.</string>
+    <string name="feed_error_body_parse">We couldn\'t read the response.</string>
+    <string name="feed_error_body_unknown">Please try again.</string>
+    <string name="feed_retry">Retry</string>
+
+    <string name="feed_empty_title">No articles yet</string>
+    <string name="feed_empty_action">Refresh</string>
+
+    <string name="feed_footer_error">Couldn\'t load more · Retry</string>
+    <string name="feed_footer_offline">Offline</string>
+    <string name="feed_footer_end">You\'re all caught up</string>
+
+    <string name="feed_refresh_failed">Couldn\'t refresh weather or services</string>
+    <string name="feed_stale_content_snackbar">Couldn\'t update — showing content from %1$s</string>
+
+    <string name="feed_weather_unavailable">Weather is temporarily unavailable</string>
+    <string name="feed_weather_updated_ago">Updated %1$s</string>
+    <string name="feed_weather_high_low">H:%1$d° L:%2$d°</string>
+
+    <string name="feed_service_cta_content_description">Open %1$s</string>
+    <string name="feed_pull_to_refresh_content_description">Refresh feed</string>
+</resources>

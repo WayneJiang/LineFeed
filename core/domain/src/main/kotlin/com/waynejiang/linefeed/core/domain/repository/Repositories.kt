@@ -6,6 +6,7 @@ import com.waynejiang.linefeed.core.domain.model.FeedArticle
 import com.waynejiang.linefeed.core.domain.model.SavedArticle
 import com.waynejiang.linefeed.core.domain.model.ServiceCard
 import com.waynejiang.linefeed.core.domain.model.Weather
+import java.time.Instant
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -18,6 +19,13 @@ import kotlinx.coroutines.flow.Flow
 interface ArticleRepository {
     fun feedPagingData(): Flow<PagingData<FeedArticle>>
     fun observeArticle(id: Long): Flow<Article?>
+
+    /**
+     * When the article cache was last successfully refreshed (`ArticleRemoteMediator`'s
+     * `sync_metadata` row) — used for the feed's "showing content from X ago" snackbar/banner text,
+     * separate from [RefreshStatus.lastSuccessAt] because articles are never a `SourceRefresher`.
+     */
+    fun observeLastSuccessAt(): Flow<Instant?>
 }
 
 interface BookmarkRepository {

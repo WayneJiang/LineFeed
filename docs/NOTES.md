@@ -254,3 +254,51 @@
 - 尚未做：`SkeletonCard` 的 shimmer 目前是簡單的 alpha 呼吸動畫，不是掃光效果；`FeedImage`
   的 placeholder/error 圖示相同（Icons.Filled.Image），detail 頁大圖版面留給 Step 10 依實際
   使用情境調整（可能需要不同 aspect ratio）。
+
+## Step 9：add paged heterogeneous feed with weather hero and service card separators
+
+- **問題（最花時間）**：`FeedViewModelTest` 一開始用 `viewModel().feedItems.asSnapshot()`
+  斷言服務卡有插入，跑起來 `kotlinx.coroutines.test.UncompletedCoroutinesError: After waiting
+  for 1m, the test body did not run to completion`。
+  **原因**：`feedItems` 是 `articleRepository.feedPagingData().cachedIn(viewModelScope)...`——
+  `viewModelScope`（`SupervisorJob() + Dispatchers.Main.immediate`）是一個獨立於 `runTest`
+  `TestScope` 的協程階層；`asSnapshot()` 需要等它收集到「穩定」為止，而 Fake 版
+  `ArticleRepository`/`ServiceCardRepository` 底層是永不完成的 `MutableStateFlow`，兩者疊加造成
+  `asSnapshot()` 永遠等不到可以視為完成的訊號。
+  **排查過程**：先移除 `cachedIn`（直接用 `articleRepository.feedPagingData().combine(...)`）
+  仍然 hang，證實問題不是 `cachedIn` 本身，而是「用永不完結的 `MutableStateFlow` 當
+  `asSnapshot()` 的上游」這個測試手法本身有問題（`FeedPagingTransformsTest` 之所以能用
+  `asSnapshot()` 成功，是因為它用 `flowOf(...)`——一個發射一次就結束的 Flow）。
+  **解法**：`FeedViewModelTest` 不對 `feedItems` 做 `asSnapshot()` 驗證；`toFeedItems()` +
+  `ServiceCardSlots` 的邏輯已經由 `FeedPagingTransformsTest`（用 `flowOf`）完整覆蓋，
+  `FeedViewModelTest` 只覆蓋 `uiState` 的邏輯（天氣狀態機、offline、pendingArticleRefreshId、
+  bookmark 切換、pull-to-refresh 訊息）。這是**測試手法的取捨**，不是不測——同一段邏輯已經
+  在別的測試被測過，重複用一個會 hang 的手法測第二次沒有增加信心，只有增加維護成本。
+- **問題**：`FeedViewModelTest` 的「outdated weather」案例一開始 `clock.advanceBy(4h)` 後把
+  `fetchedAt` 設成 `clock.now().minus(4h)`——算出來剛好等於上一次設定的 `fetchedAt`，導致
+  `MutableStateFlow` 判斷「新值等於舊值」而不重新發射，Turbine `awaitItem()` 逾時。
+  **解法**：改成在 `advanceBy` 之前就先算好一個明確不同的 `fetchedAt`，避免兩次 `Weather`
+  值意外結構相等。
+- **問題**：`FeedImage`／`Icons.Filled.*` 在 `app`、`feature:feed` 都各自需要
+  `material-icons-extended`，一開始只在 `core:designsystem` 加，`app`/`feature:feed` 編譯
+  `LineFeedApp.kt`/cells 時噴 `Unresolved reference 'icons'`。
+  **解法**：各自在 `feature/feed/build.gradle.kts`、`app/build.gradle.kts` 也加
+  `libs.androidx.compose.material.icons.extended`（`core:designsystem` 的 `implementation`
+  依賴不會傳遞給下游模組）。
+- **問題**：`NavigationBarItem` 的選中判斷 `NavDestination.hasRoute(KClass<*>)` 一開始漏了
+  import，寫成 fully-qualified 呼叫又對錯多載（`hasRoute(String, SavedState?)`）；反編譯
+  `navigation-common-android-2.10.1-sources.jar` 確認正確的擴充函式簽章是
+  `NavDestination.Companion.hasRoute(route: KClass<T>): Boolean`，改成明確 import
+  `androidx.navigation.NavDestination.Companion.hasRoute` 後正常解析。
+- **偏離 PLAN.md**：`ArticleRepository` 新增 `observeLastSuccessAt(): Flow<Instant?>`（PLAN.md
+  §7.2/§7.5 原本的介面沒有這個方法）。原因：`FeedUiState.lastUpdated`「文章 lastSuccessAt」需要
+  一個資料來源，但文章不像天氣/服務卡那樣有 `Weather.fetchedAt`/`ServiceCard` 直接帶時間戳，
+  而且文章的 `sync_metadata` 只存在 `core:data`，`feature:feed` 不能直接碰。加這個方法（底層讀
+  `SyncMetadataDao.observeAll()` 篩 `ARTICLES` 那筆）是最小、語意最清楚的做法。已同步更新
+  `FakeArticleRepository`、`OfflineFirstArticleRepositoryTest`。
+- **簡化**：`feature:feed` 沒有 `retrofit` 依賴（架構刻意不讓 feature 碰 `core:data`），所以
+  `FeedScreenState.kt` 裡的 `Throwable.toFeedAppError()` 是一個比 `core:data`
+  `ErrorMappers.toAppError()`更粗略的版本，認不出 `retrofit2.HttpException`，一律落到
+  `AppError.UNKNOWN`（不是 `SERVER`）。已在程式碼註解與 README「已知限制」處記錄。
+- **手動驗證**：本步驟的模擬器驗證（冷啟動 fresh/stale、下拉、捲到底、飛航模式）併入 Step 11
+  完成後一起做（見該步筆記）。

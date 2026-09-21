@@ -126,4 +126,15 @@ class OfflineFirstArticleRepositoryTest {
             assertEquals(1L, awaitItem()?.id)
         }
     }
+
+    @Test
+    fun `observeLastSuccessAt reflects the articles row in sync_metadata`() = runBlocking {
+        val repo = repository()
+
+        repo.observeLastSuccessAt().test {
+            assertNull(awaitItem())
+            database.syncMetadataDao().markSuccess(ContentSource.ARTICLES.name, clock.now().toEpochMilli())
+            assertEquals(clock.now(), awaitItem())
+        }
+    }
 }

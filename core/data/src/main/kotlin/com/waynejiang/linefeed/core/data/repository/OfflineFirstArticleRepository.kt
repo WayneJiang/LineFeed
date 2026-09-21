@@ -9,8 +9,10 @@ import com.waynejiang.linefeed.core.data.database.LineFeedDatabase
 import com.waynejiang.linefeed.core.data.mapper.toDomain
 import com.waynejiang.linefeed.core.data.paging.ArticleRemoteMediator
 import com.waynejiang.linefeed.core.domain.model.Article
+import com.waynejiang.linefeed.core.domain.model.ContentSource
 import com.waynejiang.linefeed.core.domain.model.FeedArticle
 import com.waynejiang.linefeed.core.domain.repository.ArticleRepository
+import java.time.Instant
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -37,4 +39,8 @@ class OfflineFirstArticleRepository @Inject internal constructor(
 
     override fun observeArticle(id: Long): Flow<Article?> =
         database.feedArticleDao().observeById(id).map { it?.toDomain()?.article }
+
+    override fun observeLastSuccessAt(): Flow<Instant?> = database.syncMetadataDao().observeAll().map { rows ->
+        rows.firstOrNull { it.source == ContentSource.ARTICLES.name }?.lastSuccessAtMillis?.let(Instant::ofEpochMilli)
+    }
 }
