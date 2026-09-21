@@ -204,3 +204,32 @@
   `MediatorResult.Error` 並寫入 `sync_metadata` 的 `lastError`）、
   `OfflineFirstArticleRepositoryTest`（`asSnapshot()` 驗證排序與收藏聯集、`observeArticle`
   以 Turbine 驗證「先 null 後有值」）、`RemoteKeyDaoTest`（get/upsert/clear）。
+
+## Step 7：add weather, service and bookmark repositories with refresh coordinator
+
+- **問題**：`AppRefreshInitializer`（`app` module）建構子想直接注入
+  `com.waynejiang.linefeed.core.data.di.ApplicationScope`／`IoDispatcher` 這類 qualifier，一開始
+  猶豫要不要把它們搬到 `core:domain`。後來維持放在 `core:data/di/Qualifiers.kt`：`app` 已經
+  依賴 `core:data`，且這兩個 qualifier 本來就是「`core:data` 內部如何跑背景工作」的實作細節，
+  domain 不需要知道，只需要透過 `FeedRefresher`/`NetworkMonitor` 介面互動。
+- **偏離 PLAN.md**（延續 Step 6 的記錄）：`AppClock`、`ArticleRepository`、`WeatherRepository`、
+  `ServiceCardRepository`、`BookmarkRepository`、`FeedRefresher`、`NetworkMonitor`
+  以及三個 `RemoteDataSource` 的 `@Binds` 全部在本步驟的 `DataModule` 一次到位（如 Step 6
+  NOTES 所述）；`app:assembleDebug` 通過即代表 Hilt 圖完整可解析（`OfflineFirstArticleRepository`
+  → `ArticleRemoteMediator` → `ArticleRemoteDataSource`/`AppClock`/`FreshnessPolicy`/`NetworkMonitor`
+  全部有 binding）。
+- **設計取捨**：`DefaultFeedRefresher.shouldFetch`/`skipReasonFor` 各自呼叫一次
+  `FreshnessPolicy.evaluate`（同一個來源、同一組參數，被跳過的來源等於算兩次）。
+  `FreshnessPolicy` 是純函式、無副作用，多算一次只是些微 CPU 成本換取程式碼更直觀（一個函式只回答
+  一個問題），在來源數量固定為 3 的情境下不值得為省一次呼叫而讓呼叫端自己快取判斷結果。
+- **測試涵蓋**：`OfflineFirstWeatherRepositoryTest`／`OfflineFirstServiceCardRepositoryTest`
+  （refresh 成功寫快取＋`sync_metadata`、失敗回 `SourceResult.Failed` 且不動快取、服務卡「整批替換
+  而非合併」）、`DefaultBookmarkRepositoryTest`（收藏/取消收藏快照、savedAt 取自注入的 clock、
+  查詢比對 title/newsSite 且不分大小寫、查詢字串含 `%`/`_` 等 LIKE 萬用字元時視為字面值）、
+  `DefaultFeedRefresherTest`（USER_PULL 無視新鮮度全部刷新、FOREGROUND 對新鮮來源跳過／對過期
+  來源刷新、一個來源失敗不影響另一個、離線時全部 Skip 且不打網路、只有 FOREGROUND/NETWORK_RESTORED
+  且文章過期才會讓 `articleRefreshRequestId` 遞增、USER_PULL 不會動 `articleRefreshRequestId`、
+  完成後 `status.inFlight` 清空）。
+- 尚未做（依計畫排到後續步驟）：`feature:feed` 尚未存在，`AppRefreshInitializer.start()` 目前沒有
+  被任何畫面/測試驗證實際的 Logcat 行為，只驗證了 Hilt 圖可解析與 `app:assembleDebug` 成功；
+  手動的模擬器驗證留到 Step 9（`feature:feed` 完成後）一起做。
