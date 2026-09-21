@@ -2,5 +2,9 @@
     <string name="saved_title">Saved</string>
     <string name="saved_empty_title">Nothing saved yet</string>
     <string name="saved_empty_body">Tap the bookmark on an article to read it later, even offline.</string>
+    <string name="saved_empty_search_title">No matches for “%1$s”</string>
     <string name="saved_offline_banner">You\'re offline — showing saved items</string>
+    <string name="saved_search_placeholder">Search saved articles</string>
+    <string name="saved_search_content_description">Search saved articles</string>
+    <string name="saved_search_clear_content_description">Clear search</string>
 </resources>

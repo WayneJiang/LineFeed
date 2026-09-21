@@ -12,8 +12,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -23,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -32,6 +41,7 @@ import com.waynejiang.linefeed.core.designsystem.component.FeedImage
 import com.waynejiang.linefeed.core.designsystem.component.FullScreenMessage
 import com.waynejiang.linefeed.core.designsystem.component.OfflineBanner
 import com.waynejiang.linefeed.core.designsystem.format.RelativeTimeFormatter
+import com.waynejiang.linefeed.core.domain.model.Article
 import com.waynejiang.linefeed.core.domain.model.SavedArticle
 import java.io.File
 import java.time.Instant
@@ -52,11 +62,21 @@ fun SavedScreen(
         Column(Modifier.padding(innerPadding).fillMaxSize()) {
             OfflineBanner(text = stringResource(R.string.saved_offline_banner), visible = uiState.isOffline)
 
+            SavedSearchField(
+                query = uiState.query,
+                onQueryChange = viewModel::onQueryChange,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+
             when {
                 uiState.isLoading -> FullScreenMessage(title = "", isLoading = true, modifier = Modifier.fillMaxSize())
-                uiState.items.isEmpty() -> FullScreenMessage(
+                uiState.items.isEmpty() && uiState.query.isBlank() -> FullScreenMessage(
                     title = stringResource(R.string.saved_empty_title),
                     body = stringResource(R.string.saved_empty_body),
+                    modifier = Modifier.fillMaxSize(),
+                )
+                uiState.items.isEmpty() -> FullScreenMessage(
+                    title = stringResource(R.string.saved_empty_search_title, uiState.query),
                     modifier = Modifier.fillMaxSize(),
                 )
                 else -> SavedContent(
@@ -69,11 +89,41 @@ fun SavedScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SavedSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier,
+        placeholder = { Text(stringResource(R.string.saved_search_placeholder)) },
+        singleLine = true,
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = stringResource(R.string.saved_search_content_description),
+            )
+        },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(
+                        imageVector = Icons.Filled.Clear,
+                        contentDescription = stringResource(R.string.saved_search_clear_content_description),
+                    )
+                }
+            }
+        },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { /* filtering already happens live */ }),
+    )
+}
+
 @Composable
 private fun SavedContent(
     items: List<SavedArticle>,
     onArticleClick: (Long) -> Unit,
-    onRemoveBookmark: (com.waynejiang.linefeed.core.domain.model.Article) -> Unit,
+    onRemoveBookmark: (Article) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val now = Instant.now()
@@ -88,6 +138,9 @@ private fun SavedContent(
                 now = now,
                 onClick = { onArticleClick(saved.article.id) },
                 onRemoveBookmark = { onRemoveBookmark(saved.article) },
+                // Removing a bookmark shrinks the list by one; animating the remaining rows into
+                // their new position reads as "it left", not "everything jumped".
+                modifier = Modifier.animateItem(),
             )
         }
     }

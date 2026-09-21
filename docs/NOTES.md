@@ -404,3 +404,51 @@
   這個子步驟（等同於清掉 OkHttp 磁碟快取但保留 app 私有檔案），因為 `bookmark_images` 本來就
   存在 `filesDir`（不是 `cacheDir`），架構上不會被「清除快取」動作影響，用停用網路已經足以
   驗證「不靠網路、不靠 HTTP 快取，純粹讀本機檔案」這件事。
+
+## Step 13：add offline search over saved articles
+
+- **`SavedViewModel`**：新增 `query: MutableStateFlow<String>`；`onQueryChange` 立即更新
+  `query`（讓輸入框跟手），但實際打 `bookmarkRepository.observeSaved(q)` 的那條 flow 用
+  `query.debounce { if (it.isBlank()) 0L else 300L }.flatMapLatest { observeSaved(it) }`——
+  用「依值決定 debounce 時間」而不是固定 `debounce(300)`，是因為固定版本連冷啟動第一次的空字串
+  查詢都會被延遲 300ms，導致 App 一開啟先空白閃一下才出現清單。
+- **UI**：`SavedScreen` 頂部加 `OutlinedTextField` 搜尋欄（含清除按鈕），空清單依
+  `query.isBlank()` 分兩種文案（「還沒有收藏」vs「找不到符合 "xxx" 的收藏」）；
+  `SavedContent` 的 `LazyColumn` item 加 `Modifier.animateItem()`，取消收藏後其餘項目會平滑
+  移動到新位置而不是瞬間跳動；`BookmarkIconButton` 的 crossfade 動畫在 Step 8 已經做好，
+  這裡沿用。
+- **問題（最花時間）**：`SavedViewModelTest` 要測「debounce 真的延遲了 300ms」，一開始沿用
+  `MainDispatcherRule` 預設的 `UnconfinedTestDispatcher()`（它有自己獨立的
+  `TestCoroutineScheduler`，跟 `runTest` 自己的 scheduler 是兩個不同的時鐘），導致
+  `advanceTimeBy` 完全不影響 `debounce` 內部的 `delay()`。
+  **解法**：在需要控制虛擬時間的兩個測試裡，改成
+  `Dispatchers.setMain(StandardTestDispatcher(testScheduler))`——把 `Dispatchers.Main`
+  換成跟 `runTest` 共用同一個 `testScheduler` 的 dispatcher，這樣 `advanceTimeBy`/
+  `advanceUntilIdle`/`runCurrent` 才能真正推進 `viewModelScope` 裡的 `delay()`。
+  **踩到的第二個坑**：這兩個測試一開始比照其他測試寫
+  `try { ... } finally { Dispatchers.resetMain() }`，結果丟出
+  `IllegalStateException: Dispatchers.Main was accessed when the platform dispatcher was
+  absent and the test dispatcher was unset`。原因是 `ViewModel` 從來沒有人呼叫
+  `onCleared()`（純 unit test 不会真的清掉 `viewModelScope`），`stateIn(WhileSubscribed(5000))`
+  背後的協程仍然活著；`finally` 裡手動呼叫 `resetMain()` 的時機比 `runTest` 自己收尾時
+  （會嘗試 flush/取消剩餘的子協程）還早，剩餘協程這時候想用 `Dispatchers.Main` 卻發現已經被
+  reset 掉，就整個炸開。**解法**：這兩個測試乾脆不手動呼叫 `resetMain()`，讓外層
+  `MainDispatcherRule` 的 `finished()`（在 `@Test` method 完全返回、`runTest` 自己的收尾都跑完
+  之後才執行）統一處理，時機才對。
+  **踩到的第三個坑**：改用「收集進一個 `List` 再看 `states.last()`」取代 Turbine 的
+  `awaitItem()`——因為 `StateFlow` 一被訂閱就會先給出目前值（`SavedUiState()` 預設值），
+  在 `StandardTestDispatcher` 下這個預設值與後續真正算出來的值是兩個分開、依序到達的項目，
+  Turbine 嚴格「一次只能拿下一個」的語意跟這種「不確定會有幾個中間值」的情境不合拍；改看
+  「目前為止收到的最後一個值」對中間到底發射幾次不敏感，斷言反而更準確也更好維護。
+  **踩到的第四個坑（純粹是我自己測試資料設計錯誤）**：「快速輸入只會真的查一次」的測試一開始
+  只收藏了一篇標題為「Rocket launch」的文章，导致「未過濾清單」與「用 "rocket" 過濾後的清單」
+  剛好是同一個結果（因為就這一篇，且怎麼濾都符合），沒辦法分辨「有沒有中途多查了幾次」；
+  補一篇不符合 "rocket" 的文章後才真的測到重點。
+- **測試涵蓋**：`SavedViewModelTest` 新增：冷啟動空字串查詢不用等 debounce、
+  `onQueryChange` 立即反映在 `query` 欄位但清單要等 debounce 結束才更新、快速輸入多次只有
+  最後一個查詢字串真正打到 repository（中間值被跳過）。
+- **模擬器驗證**：本步驟開始時模擬器已經在先前步驟驗證後關閉；重新檢查裝置列表時發現
+  USB 上接的是一台真實實體手機（`ro.kernel.qemu`/`ro.boot.qemu` 皆為空，非模擬器），
+  為了安全起見**沒有**對這台裝置執行任何 `install`/`shell` 修改類指令（只讀了
+  `getprop` 確認它是實體機就停手），因此 Step 13 的搜尋 UI/動畫沒有額外補模擬器截圖，
+  邏輯正確性由上述新增的 ViewModel 測試涵蓋。
