@@ -14,12 +14,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.waynejiang.linefeed.R
@@ -27,18 +25,12 @@ import com.waynejiang.linefeed.feature.detail.ArticleDetailRoute
 import com.waynejiang.linefeed.feature.detail.articleDetailScreen
 import com.waynejiang.linefeed.feature.feed.FeedRoute
 import com.waynejiang.linefeed.feature.feed.feedScreen
-import kotlinx.serialization.Serializable
-
-/**
- * Placeholder until `feature:saved` exists (PLAN.md §10 step 9: "底部導覽骨架"; step 11 replaces
- * this with the real `SavedRoute`/`savedScreen`).
- */
-@Serializable
-private data object SavedPlaceholderRoute
+import com.waynejiang.linefeed.feature.saved.SavedRoute
+import com.waynejiang.linefeed.feature.saved.savedScreen
 
 private sealed class TopLevelDestination(val route: Any, val labelRes: Int, val icon: ImageVector) {
     data object Reading : TopLevelDestination(FeedRoute, R.string.app_nav_reading, Icons.Filled.Home)
-    data object Saved : TopLevelDestination(SavedPlaceholderRoute, R.string.app_nav_saved, Icons.Filled.Bookmark)
+    data object Saved : TopLevelDestination(SavedRoute, R.string.app_nav_saved, Icons.Filled.Bookmark)
 }
 
 private val topLevelDestinations = listOf(TopLevelDestination.Reading, TopLevelDestination.Saved)
@@ -80,7 +72,7 @@ fun LineFeedApp() {
             feedScreen(
                 onArticleClick = { articleId -> navController.navigate(ArticleDetailRoute(articleId)) },
                 onOpenSaved = {
-                    navController.navigate(SavedPlaceholderRoute) {
+                    navController.navigate(SavedRoute) {
                         popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                         launchSingleTop = true
                         restoreState = true
@@ -88,9 +80,7 @@ fun LineFeedApp() {
                 },
             )
             articleDetailScreen(onBack = { navController.popBackStack() })
-            composable<SavedPlaceholderRoute> {
-                Text(text = stringResource(R.string.app_saved_coming_soon), modifier = Modifier.padding(16.dp))
-            }
+            savedScreen(onArticleClick = { articleId -> navController.navigate(ArticleDetailRoute(articleId)) })
         }
     }
 }

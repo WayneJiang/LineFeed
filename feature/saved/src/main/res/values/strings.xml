@@ -1,0 +1,6 @@
+<resources>
+    <string name="saved_title">Saved</string>
+    <string name="saved_empty_title">Nothing saved yet</string>
+    <string name="saved_empty_body">Tap the bookmark on an article to read it later, even offline.</string>
+    <string name="saved_offline_banner">You\'re offline — showing saved items</string>
+</resources>

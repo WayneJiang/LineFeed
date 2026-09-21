@@ -11,13 +11,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import coil3.compose.AsyncImage
-import coil3.compose.AsyncImagePainter
-import coil3.compose.rememberAsyncImagePainter
+import coil3.compose.SubcomposeAsyncImage
 
 /**
  * Every article/service thumbnail goes through this one composable so the placeholder/error look
  * (and later, any Coil configuration change) only needs to change in one place.
+ *
+ * Uses `SubcomposeAsyncImage` (not a manually-`remember`ed `AsyncImagePainter` read alongside a
+ * separate `AsyncImage`): an earlier version did that, and the state-tracking painter was never
+ * actually laid out (it existed only to peek at `.state`), so it got zero size constraints, Coil
+ * couldn't resolve a target size for it, and it reported `Empty`/`Error` even once the real,
+ * visibly-laid-out request had already succeeded — the placeholder icon stayed on screen forever
+ * despite the image having loaded (caught during emulator verification, see docs/NOTES.md).
+ * `SubcomposeAsyncImage`'s `loading`/`error` slots are Coil's own supported way to do this and
+ * don't have that problem.
  */
 @Composable
 fun FeedImage(
@@ -26,29 +33,23 @@ fun FeedImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
 ) {
-    val painter = rememberAsyncImagePainter(model = model, contentScale = contentScale)
-    val state: AsyncImagePainter.State = painter.state.value
-
-    Box(
+    SubcomposeAsyncImage(
+        model = model,
+        contentDescription = contentDescription,
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center,
-    ) {
-        when (state) {
-            is AsyncImagePainter.State.Error, is AsyncImagePainter.State.Empty -> {
-                Icon(
-                    imageVector = Icons.Filled.Image,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            else -> {
-                AsyncImage(
-                    model = model,
-                    contentDescription = contentDescription,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = contentScale,
-                )
-            }
-        }
+        contentScale = contentScale,
+        loading = { PlaceholderIcon() },
+        error = { PlaceholderIcon() },
+    )
+}
+
+@Composable
+private fun PlaceholderIcon() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Icon(
+            imageVector = Icons.Filled.Image,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

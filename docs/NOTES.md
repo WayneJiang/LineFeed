@@ -326,3 +326,50 @@
   isOffline、feed 快取沒有但收藏快照有時 fallback 到快照（含離線後 feed 快取被清空的情境）、
   `localImagePath` 只從收藏快照來（不是 feed 快取）、只在 feed 快取而未收藏時 `isBookmarked`
   為 false、收藏/取消收藏的 toggle、內容尚未載入時呼叫 `onToggleBookmark()` 是 no-op。
+
+## Step 11：add saved articles screen with offline banner
+
+- **`feature:saved`**：`SavedViewModel`（`BookmarkRepository.observeSaved()` + `NetworkMonitor` 的
+  `combine`）、`SavedUiState`（`query` 欄位先放著但沒有 UI，等 Step 13）、`SavedScreen`（Empty/
+  Loading/列表 三態、離線 banner、縮圖優先用 `localImagePath`）。底部導覽 Reading/Saved 完成
+  （`app/LineFeedApp.kt` 把 Step 9 的 `SavedPlaceholderRoute` 換成真正的 `SavedRoute`/
+  `savedScreen`），Saved → Detail 導覽接上。
+
+- **模擬器手動驗證（本步驟做，涵蓋 Step 9 + 11 的清單）**：`~/Library/Android/sdk/emulator/emulator
+  -avd Pixel_10_Pro_XL` 開機、`./gradlew :app:installDebug`、`adb shell am start`，實機截圖存在
+  `/private/tmp/.../scratchpad/screens/`（未提交）。過程中抓到兩個先前步驟遺留、單元測試測不到的
+  真實 bug：
+
+  1. **`AndroidManifest.xml` 的 `android:name` 相對路徑錯誤（Step 1 遺留）**：
+     `android:name=".LineFeedApplication"`／`".MainActivity"` 相對於 manifest 的
+     `package`（等於 `namespace = "com.waynejiang.linefeed"`），解析成
+     `com.waynejiang.linefeed.LineFeedApplication`；但類別實際在
+     `com.waynejiang.linefeed.app` package 下，執行期
+     `ClassNotFoundException` → app 開啟就閃退。**單元測試/Robolectric 都不會跑真正的
+     manifest class 解析與啟動流程，所以 65+99+... 個單元測試全綠也完全沒發現這個問題**——
+     這是本次唯一必須靠實機/模擬器才抓得到的一類 bug。修正為
+     `android:name=".app.LineFeedApplication"`／`".app.MainActivity"`。
+  2. **`FeedImage` 的 placeholder/error 判斷邏輯是假的（Step 8 遺留）**：原本用
+     `rememberAsyncImagePainter` 讀 `.state` 決定要不要顯示 Icon，「顯示圖片」那個分支卻另外
+     呼叫一個獨立的 `AsyncImage(model = model, ...)`——等於同一張圖發了兩個獨立請求：一個藏在
+     `when` 判斷背後、從來沒有真的被排版（layout），Coil 拿不到目標尺寸所以回報
+     `Empty`/`Error`；另一個才是真正顯示、有尺寸、會成功的請求。因為判斷式看的是「那個藏起來、
+     注定失敗」的請求的狀態，畫面永遠卡在 placeholder icon，即使圖片其實已經下載成功
+     （OkHttp log 顯示 200 OK）。Feed 列表卡片曾經「看起來正常」只是巧合（第一次截圖時機掩蓋了
+     問題，後續在 Detail 頁用更大尺寸的 hero 圖重現才發現）。**改用 Coil3 官方支援的
+     `SubcomposeAsyncImage(loading = {...}, error = {...})`**（單一請求、`loading`/`error` 是
+     official 的 slot API），問題徹底消失。用 `Log.e` 暫時加在 `FeedImage` 裡印出
+     `model`/`state` 才定位到「印一次就不再印」→ 該 composable 沒有隨真正的請求狀態重組——
+     這個線索指向「讀狀態的物件」跟「顯示圖片的物件」根本是兩個不同的 Coil request。
+  3. **`linefeed.db` 版本殘留問題**：模擬器上曾經因為先前失敗的啟動流程留下舊版本 schema 的
+     DB 檔案（`Room` 丟 `A migration from 4 to 1 was required but not found`），`adb uninstall`
+     重裝後消失——與程式碼本身無關，記錄是因為這是本機模擬器驗證的操作細節，不是要修的 bug。
+
+  兩個修正後，實機驗證通過：冷啟動載入真實 API 資料（Spaceflight/Open-Meteo/DummyJSON）、
+  weather hero 卡（含「Updated Xm ago」）、TopStory/ArticleRow/ServiceCard 正確穿插、收藏
+  toggle 即時生效並反映在 Saved 頁、Saved → Detail 導覽、light/dark 兩種主題都清楚可讀（截圖
+  比對）。滾動到底、離線飛航模式與下拉刷新的動畫時序未逐一截圖驗證，之後有機會再補；
+  已驗證核心資料流與畫面切換沒有問題。
+
+- **測試涵蓋**：`SavedViewModelTest`（loading→就緒轉換、空清單、清單反映 repository 內容、
+  isOffline 跟隨 NetworkMonitor、移除收藏後清單即時更新）。
