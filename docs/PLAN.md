@@ -4,6 +4,10 @@
 > 原則：**每一步都能獨立 build、都有測試、都講得出理由**。遇到本文件沒寫清楚的地方，選最簡單、可測試的做法，並記在 commit message 或 `docs/NOTES.md`（實作期間的決策流水帳，最後彙整進 DECISIONS.md）。
 >
 > 本文件中的版本、API 欄位、payload 大小都在 2026-09-21 於本機實際驗證過（見 §6、§8 的「驗證證據」）。
+>
+> **修訂紀錄**
+> - v1（2026-09-21）：初版，分頁採手寫 keyset。
+> - v2（2026-09-21）：Wayne 審閱後推翻 §2.8，分頁改為 **Paging 3 + RemoteMediator**（保留 keyset 游標於 APPEND）。受影響：§0、§1.3、§2.2、§2.8、§3.3、§3.5、§4.1、§5.2、§5.5、§6.4、§6.5、§7.1、§7.2、§7.4、§7.5、§8、§9、§10（Step 6 起）、§11。Step 1–5 不變；需要調整的 interface/entity 併入 Step 6。
 
 ---
 
@@ -12,17 +16,17 @@
 | 項目 | 決定 |
 |---|---|
 | UI | Jetpack Compose + Material 3，自訂品牌綠色主題，支援 Dark theme（不用 dynamic color） |
-| 架構 | 單向資料流（UDF）；Room 是唯一資料來源（single source of truth）；ViewModel 對外只暴露一個 `StateFlow<XxxUiState>` |
+| 架構 | 單向資料流（UDF）；Room 是唯一資料來源（single source of truth）；ViewModel 對外暴露 `StateFlow<XxxUiState>`（非分頁狀態），Feed 另外暴露 `Flow<PagingData<FeedItem>>` |
 | DI | Hilt（KSP） |
 | 持久化 | Room（文章快取、收藏快照、天氣、服務卡、同步 metadata 全部進同一個 DB）；**不使用 DataStore** |
 | 網路 | Retrofit 3 + OkHttp 5 + kotlinx.serialization；OkHttp 磁碟快取（尊重 server `Cache-Control`） |
 | 圖片 | Coil 3（共用 OkHttpClient）；收藏文章的圖片另外下載到 `filesDir`，保證離線可看 |
 | 並行 | Coroutines + Flow；注入 `CoroutineDispatcher`、`@ApplicationScope CoroutineScope`、`AppClock` |
-| 分頁 | **手寫 keyset 分頁**（`published_at_lte` 游標 + id 去重），不用 Paging 3。異質 feed 由純函式 `FeedAssembler` 組合 |
-| 新鮮度 | 每個來源各自 TTL（天氣 15/30 分、文章 20/60 分、服務卡 12/24 小時，依 unmetered/metered），stale-while-revalidate，只在前景刷新，無背景同步 |
+| 分頁 | **Paging 3 + `RemoteMediator` + Room `PagingSource`**（v2 修訂，見 §2.8）。APPEND 保留 keyset 游標（`published_at_lte` + id 去重，游標存 `remote_keys` 表）；文章帶遞增 `sortIndex`，服務卡以 `insertSeparators` 依 `sortIndex` 規則穿插；天氣 hero 不進 PagingData（LazyColumn 先放 `item {}`） |
+| 新鮮度 | 每個來源各自 TTL（天氣 15/30 分、文章 20/60 分、服務卡 12/24 小時，依 unmetered/metered），stale-while-revalidate，只在前景刷新，無背景同步。文章的冷啟動決策在 `RemoteMediator.initialize()`，與其他來源共用同一個 `FreshnessPolicy` |
 | Module | 8 個 module + `build-logic` convention plugins：`app`、`core:domain`(純 JVM)、`core:data`、`core:designsystem`、`core:testing`(純 JVM)、`feature:feed`、`feature:detail`、`feature:saved` |
 | 工具鏈 | Gradle 9.7.1、AGP 9.4.0（內建 Kotlin）、Kotlin 2.4.20、KSP 2.3.12、compileSdk 37 / targetSdk 36 / minSdk 24、JDK 21 執行、bytecode target 17 |
-| 測試 | JUnit4 + kotlinx-coroutines-test + Turbine + 手寫 Fake；Room/Repository 測試用 Robolectric（SDK 36）；網路解析用 MockWebServer + 真實 JSON fixture。**不用 MockK** |
+| 測試 | JUnit4 + kotlinx-coroutines-test + Turbine + 手寫 Fake；Room/Repository/RemoteMediator 測試用 Robolectric（SDK 36）+ in-memory Room；分頁用官方 `paging-testing`（`TestPager`、`asSnapshot()`）；網路解析用 MockWebServer + 真實 JSON fixture。**不用 MockK** |
 | 指令 | Build：`./gradlew assembleDebug`；測試：`./gradlew unitTest`（root 聚合 task） |
 
 ---
@@ -33,7 +37,7 @@
 
 | # | 需求 | 本專案對應 | 理由 / 備註 |
 |---|---|---|---|
-| M1 | Feed 分頁載入 | Spaceflight News 文章，keyset 分頁，接近底部自動載入下一頁 | 需求明文 |
+| M1 | Feed 分頁載入 | Spaceflight News 文章，Paging 3 + RemoteMediator（APPEND 用 keyset 游標），接近底部自動載入下一頁 | 需求明文 |
 | M2 | 詳情頁 | `feature:detail`：大圖、來源、時間、作者、標題、summary、「閱讀原文」 | Spaceflight API 只提供 summary，沒有全文（見 §4.4） |
 | M3 | 收藏 / 取消收藏，首次載入後離線可讀 | `bookmarks` 表存完整快照 + 圖片存到 `filesDir` | 不能只存 id（feed 快取會被清） |
 | M4 | 「已收藏」清單頁 | `feature:saved` | 需求明文 |
@@ -64,9 +68,10 @@
 | 離線閱讀「原文全文」 | 砍 | API 只給 summary；抓第三方網頁做 readability 萃取 / WebView archive 屬於另一個產品題目，且有版權與流量問題。離線可讀範圍 = API 提供的全部欄位 + 圖片 |
 | 依定位的天氣 | 砍（固定台北） | 需要定位權限與權限拒絕流程，對評分重點（新鮮度、離線）沒有幫助 |
 | 遠端搜尋（API `search=`） | 延後 | 選擇本地過濾（離線可用）；遠端搜尋需要另一套分頁與 debounce 取消邏輯 |
-| Paging 3 | 不採用（不是延後） | 見 §2.8 |
+| 手寫分頁 | 不採用（v2 修訂：改用 Paging 3） | 見 §2.8「決策變更紀錄」 |
+| 文章刷新「重疊合併」（保留舊頁） | 延後（v2） | 採 Paging 3 標準做法：REFRESH 成功後在 transaction 內清空重建，`sortIndex` 從 0 重排，保持 separator 規則簡單；代價是舊頁需重新 APPEND（JSON 每頁約 5 KB，圖片多半命中 Coil 磁碟快取） |
 | 拆分 `core:network` / `core:database` | 延後 | 目前只有 `core:data` 一個消費者；等第二個消費者出現再拆（YAGNI） |
-| 「N 則新文章」提示 pill（取代自動插入） | 延後 | 目前靠 LazyColumn 以 key 保持捲動錨點，已避免跳動 |
+| 「N 則新文章」提示 pill | 延後 | 回前景的文章刷新只在 Feed 畫面可見時才執行（§3.3），且刷新後捲回頂端；pill 是更好的 UX 但非必要 |
 | Compose UI 測試 / 截圖測試 / instrumented test | 延後 | UI 狀態由 ViewModel 單元測試覆蓋（狀態 → 畫面是純渲染）；UI 測試回報率較低 |
 | 漢堡選單 / Drawer | 砍 | 參考圖有，但沒有實際內容可放；放一個空選單比沒有更糟 |
 | 取消收藏的 Undo snackbar | 延後 | 好的 UX，但非必要 |
@@ -90,6 +95,8 @@
   - `uiState` = `combine(repository flows…, 本地 MutableStateFlow)` → `stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), initial)`。
   - 一次性訊息（snackbar）**放在 state 裡**（`userMessage: UserMessage?` + `onUserMessageShown()`），不用 `Channel`/`SharedFlow`——config change / 背景時不會遺失，也容易測試（Google 官方 UI layer 指引的做法）。
   - 「是否整頁顯示 loading/empty/error/offline」由**純函式** `deriveFullScreenState(...)` 推導，單獨測試。
+  - **分頁內容例外（v2）**：Feed 的文章 + 服務卡是 `val feedItems: Flow<PagingData<FeedItem>>`（`cachedIn(viewModelScope)`），不放進 UiState——`PagingData` 不是可比較的值，塞進 data class 會破壞 state 的語意。分頁的 loading/error 來自 `LazyPagingItems.loadState`（UI 端），整頁狀態由純函式 `deriveFeedScreenState(loadStates, itemCount, isOffline)` 在 UI 端推導並單獨測試。天氣、離線、刷新請求、snackbar 仍在 `StateFlow<FeedUiState>`。
+  - 取捨：Feed 畫面有兩個狀態來源（UiState + LoadState），比單一 state 多一點心智負擔；換來 Paging 內建的 append 觸發、retry、LoadState。
 - **替代**：MVI 框架（Orbit / Mavericks）、多個獨立 `StateFlow`、`LiveData`、Compose `mutableStateOf` 放在 VM。
 - **取捨**：單一 state 物件讓「不可能狀態」較難出現、測試只需斷言一個值；代價是每次任何欄位變動都複製整個 data class（此規模可忽略）。不引入 MVI 框架以避免額外概念與依賴。
 
@@ -128,19 +135,25 @@
 - **替代**：RxJava（學習成本、與 Compose/Room 整合不如 Flow）、callback。
 - **取捨**：Flow 是 Room/Compose/Lifecycle 的原生語言；結構化並行讓取消正確傳遞。
 
-### 2.8 分頁：手寫 keyset 分頁（不用 Paging 3）
+### 2.8 分頁：Paging 3 + RemoteMediator + Room PagingSource（v2 修訂）
 - **選擇**：
-  - Room 觀察整個快取文章列表 `Flow<List<ArticleEntity>>`（排序 `publishedAt DESC, id DESC`）。
-  - 下一頁：`loadNextPage()` 以快取中**最舊的 `publishedAt`** 當游標，呼叫 `?published_at_lte=<cursor>&ordering=-published_at&limit=20`，用 id upsert 去重（邊界那幾筆一定會重複回來）。
-  - 結束條件：回傳筆數 < pageSize，或「這一頁沒有任何新 id」（防止同一秒大量文章造成無限迴圈）。
-  - ViewModel 持有 `AppendState`（Idle / Loading / Error / EndReached / Offline），UI 透過 `snapshotFlow { lastVisibleIndex }` 在距離底部 5 筆時呼叫 `onNearEnd()`；VM 在 Loading/EndReached 時忽略。
-  - 異質 feed：純函式 `FeedAssembler.assemble(weather, articles, services): List<FeedItem>`。
-- **為什麼用 keyset 而非 offset**：文章持續新增，offset 分頁在「讀第 2 頁之前有新文章發布」時會重複或漏掉；已驗證 API 支援 `published_at_lte` / `published_at_lt`（§6.1）。
-- **替代**：Paging 3 + `RemoteMediator` + Room `PagingSource`。
+  - `Pager(PagingConfig(pageSize = 20, prefetchDistance = 5, initialLoadSize = 20, enablePlaceholders = false), remoteMediator = ArticleRemoteMediator(...)) { feedArticleDao.pagingSource() }`，Pager 在 `core:data` 建立，domain interface 暴露 `Flow<PagingData<Article>>`（`paging-common` 是 KMP/JVM artifact，`core:domain` 仍維持純 JVM）。
+  - **Room 是唯一資料來源**：UI 只讀 Room `PagingSource`；`ArticleRemoteMediator` 是**唯一會寫入文章快取的程式碼**。
+  - `PagingSource` 查詢：`feed_articles LEFT JOIN bookmarks` 一次帶出 `isBookmarked`，`ORDER BY sortIndex ASC`。收藏變動時 Room 自動 invalidate，不需要在 VM 另外 combine 收藏 id。
+  - **REFRESH**：抓第一頁（`?limit=20&ordering=-published_at`）→ 成功後才開 transaction：`clearAll()` + 清 remote key + 以 `sortIndex = 0..n-1` 寫入 + 寫 `remote_keys(nextCursor = 本頁最舊 publishedAt, endReached)` + `sync_metadata.markSuccess(ARTICLES)`。失敗則快取不動，回 `MediatorResult.Error`。
+  - **APPEND（保留 keyset 游標的優點）**：游標取自 `remote_keys.nextCursor`（不是 offset、也不用 `next` URL），呼叫 `?published_at_lte=<cursor>&ordering=-published_at&limit=20`；先查 `existingIds()` 濾掉邊界重複，只為**新 id** 指派 `sortIndex = maxSortIndex + 1 …`（在 transaction 內計算）；結束條件：回傳筆數 < pageSize 或「沒有任何新 id」（同秒大量文章的無限迴圈保護）。`remote_keys` 不存在（從未成功 REFRESH）時回 `Success(endOfPaginationReached = false)`，等 REFRESH 寫入後 PagingSource invalidate 再觸發。離線時直接回 `MediatorResult.Error(OfflineException)`，不發無謂請求。
+  - **PREPEND**：永遠 `Success(endOfPaginationReached = true)`（新文章由 REFRESH 取得）。
+  - **`initialize()`** 用同一個 `FreshnessPolicy`：`evaluate(ARTICLES, lastSuccessAt, network, COLD_START)` 為 `Fetch` → `LAUNCH_INITIAL_REFRESH`，否則 `SKIP_INITIAL_REFRESH`（§3.3）。
+  - **異質混排**：
+    - 天氣 hero **不進 PagingData**：`LazyColumn { item(key = "weather") { WeatherHeroCard } ; items(lazyPagingItems.itemCount, key = lazyPagingItems.itemKey { it.key }, contentType = lazyPagingItems.itemContentType { it.contentType }) { … } }`。
+    - 服務卡：VM 以 `pagingData.map { it.toFeedItem() }.insertSeparators { before, after -> … }` 插入，判斷規則抽成純函式 `ServiceCardSlots.slotBefore(sortIndex: Long): Int?`（`sortIndex >= firstAfter && (sortIndex - firstAfter) % every == 0` → `slot = (sortIndex - firstAfter) / every`，預設 `firstAfter = 3, every = 6`），卡片取 `services[slot % services.size]`，key `service-$slot`（slot 由唯一的 sortIndex 決定 → 必唯一）。
+    - `sortIndex == 0` 的文章 map 成 `FeedItem.TopStory`，其餘 `FeedItem.ArticleRow`。
+- **為什麼 APPEND 仍用 keyset 而非 offset**：文章持續新增，offset 分頁在「讀第 2 頁之前有新文章發布」時會重複或漏掉；已驗證 API 支援 `published_at_lte` / `published_at_lt`（§6.1）。游標存在 `remote_keys` 而非從 `PagingState.lastItemOrNull()` 推：程序重啟後（`SKIP_INITIAL_REFRESH`）仍知道游標與是否到底。
+- **替代方案（原 v1 決策）**：手寫 keyset 分頁——Room `Flow<List<Article>>` 觀察整個快取、VM 持有 `AppendState` 狀態機、`snapshotFlow` 偵測接近底部觸發 `loadNextPage()`、純函式 `FeedAssembler` 組合天氣/文章/服務卡。
 - **取捨**：
-  - Paging 3 的優點：記憶體視窗化、placeholder、內建 LoadState、retry。
-  - 不採用的理由：(1) 異質混排在 Paging 裡只能用 `insertSeparators`，而「每 N 篇插一張服務卡」需要位置資訊，`insertSeparators` 只有 before/after，沒有 index，要嘛在 DB 維護 sortIndex、要嘛寫有狀態的 separator，都很彆扭；(2) `RemoteMediator.initialize()` 與 `REFRESH` 會變成第二個「決定何時刷新」的地方，和我們集中式的新鮮度協調器（§3）重複；(3) 本 App 快取上限數百筆，Paging 的記憶體視窗化效益低；(4) 手寫版本讓 feed 組合成為可完整單元測試的純函式，append 狀態機也清楚可測（對應加分項「非同步邏輯測試」）。
-  - 代價：自己處理觸發時機、去重、重試、結束條件；沒有 placeholder。若 feed 規模變成無限長（例如 VOOM），會改回 Paging 3 並把服務卡改成 DB 內的一種 row type。
+  - Paging 3 得到：內建 append 觸發與 prefetch、`LoadState`（loading/error/end）、`retry()`/`refresh()`、記憶體視窗化、與 Room invalidation 的整合、官方測試工具（`paging-testing`）。
+  - 代價：Feed 畫面有兩個狀態來源（UiState + LoadState）；`insertSeparators` 需要 DB 維護 `sortIndex`；`RemoteMediator` 的邊界情況（空 DB 時的 APPEND、REFRESH 與 APPEND 的順序）需要理解 Paging 內部行為；REFRESH 清空重建使「重疊合併」不再適用。
+- **決策變更紀錄（面試素材）**：v1 計畫（Opus 規劃）選擇手寫分頁，理由是 (1) `insertSeparators` 沒有 index、難以「每 N 篇插一張」，(2) `initialize()`/`REFRESH` 會與集中式新鮮度協調器重複決策，(3) 快取規模小，(4) 手寫較好測。Wayne 審閱後推翻，逐點回應：(1) 天氣 hero 不必進 PagingData；服務卡位置可由 mediator 寫入時指派遞增 `sortIndex` 解決，規則抽成純函式即可測；(2) 讓 `initialize()` 直接呼叫同一個 `FreshnessPolicy`，政策仍是唯一決策點，只是多一個呼叫端；(3) Paging 的價值是內建 LoadState/retry/append 觸發（省工），不是記憶體；(4) 官方 `paging-testing`（`TestPager`、`asSnapshot()`）足以測 PagingSource 與轉換，RemoteMediator 可用 Robolectric + in-memory Room 直接呼叫 `load()` 測。**結論：採用 Paging 3，保留 v1 的 keyset 游標設計於 APPEND。** 這段要寫進 DECISIONS.md 與 AI_USAGE.md（「拒絕/改寫了 AI 的建議」的真實例子）。
 
 ### 2.9 Module 結構
 - **選擇**（8 module + included build `build-logic`）：
@@ -226,13 +239,15 @@ graph TD
 
 ### 3.3 何時觸發刷新
 
-| 觸發（`RefreshTrigger`） | 行為 |
-|---|---|
-| `COLD_START`（程序第一次進入前景） | 立即顯示快取；逐來源判斷 TTL，只刷新過期的 |
-| `FOREGROUND`（從背景回前景，`ProcessLifecycleOwner` ON_START） | 同上。TTL 本身就是節流器：5 分鐘內切換 App 十次也不會多打請求 |
-| `NETWORK_RESTORED`（前景中 offline → online） | 同上（離線期間可能已過期） |
-| `USER_PULL`（下拉重新整理 / 錯誤頁的重試） | **忽略 TTL，所有來源都刷新**（不論 metered），因為這是使用者明確意圖 |
-| 背景中的任何事件 | 不刷新 |
+| 觸發（`RefreshTrigger`） | 天氣 / 服務卡（`DefaultFeedRefresher`） | 文章（Paging 3） |
+|---|---|---|
+| `COLD_START`（程序第一次進入前景） | 立即顯示快取；逐來源判斷 TTL，只刷新過期的 | **由 `ArticleRemoteMediator.initialize()` 決定**：policy 說 Fetch → `LAUNCH_INITIAL_REFRESH`，否則 `SKIP_INITIAL_REFRESH`（Pager 建立＝文章的冷啟動）。協調器在 COLD_START 不碰文章，避免雙重決策 |
+| `FOREGROUND`（從背景回前景，`ProcessLifecycleOwner` ON_START） | 同上。TTL 本身就是節流器：5 分鐘內切換 App 十次也不會多打請求 | 協調器以 policy 判斷；Fetch 時**不直接抓**，而是發出「文章刷新請求」（`RefreshStatus.articleRefreshRequestId` 遞增）。Feed 畫面可見時以 `LaunchedEffect` 呼叫 `lazyPagingItems.refresh()`（→ mediator REFRESH）並捲回頂端；使用者在 Saved 頁時請求保留到回 Feed 才執行（看不到的畫面不花流量） |
+| `NETWORK_RESTORED`（前景中 offline → online） | 同上 | 同 FOREGROUND |
+| `USER_PULL`（下拉重新整理 / 錯誤頁的重試） | **忽略 TTL 全部刷新**（不論 metered） | UI 呼叫 `lazyPagingItems.refresh()`；mediator 的 `load(REFRESH)` 永遠抓網路（`initialize()` 只在 Pager 建立時呼叫一次） |
+| 背景中的任何事件 | 不刷新 | 不刷新 |
+
+重點：**`FreshnessPolicy` 是唯一的決策規則**，只有兩個呼叫端——`initialize()`（Pager 建立時）與 `DefaultFeedRefresher`（生命週期/網路觸發）；**`ArticleRemoteMediator` 是唯一會寫入文章快取的程式碼**。兩者分工不重疊：COLD_START 的文章歸 `initialize()`，其餘觸發歸協調器（經由 UI 的 `refresh()` 走 mediator）。
 
 觸發流由純 Flow 函式 `refreshTriggers(isForeground: Flow<Boolean>, network: Flow<NetworkStatus>): Flow<RefreshTrigger>` 產生（可用 Turbine 測），`app` 只負責把 `ProcessLifecycleOwner` 轉成 `Flow<Boolean>` 並在 `@ApplicationScope` 收集。
 
@@ -248,7 +263,9 @@ graph TD
 ### 3.5 避免浪費流量的其他手段
 
 - **Single-flight**：同一來源同時多個觸發只打一次（§2.7）。
-- **文章刷新採「重疊合併」而非整批替換**：刷新抓第一頁後，若該頁與快取有重疊 id → 只 upsert（保留使用者已載入的舊頁、圖片也不必重抓）；若沒有重疊（離線太久，中間有缺口）→ 在 transaction 中清空文章快取再寫入（避免列表出現時間斷層）。快取上限 300 筆，超過從最舊的刪。
+- **文章 REFRESH 只抓第一頁、成功後才替換**：網路成功後在同一個 transaction 內清空並重建（`sortIndex` 從 0 重排）；舊頁不預先重抓，使用者捲動時才 APPEND。圖片 URL 不變，重新顯示時多半命中 Coil 磁碟快取，實際流量主要是約 5 KB 的 JSON。（v1 的「重疊合併」因與 `sortIndex` 連續性衝突而延後，§1.3。）
+- **看不到的畫面不刷新文章**：回前景時的文章刷新請求只在 Feed 可見時執行（§3.3）。
+- **離線不發 APPEND 請求**：mediator 先查 `NetworkMonitor`，離線直接回 Error（UI 顯示離線 footer）。
 - **失敗不破壞快取**：網路失敗時快取與 `lastSuccessAt` 都不動，只記錄 `lastAttemptAt/lastError`。
 - **OkHttp HTTP cache**：尊重 `max-age=600`；DummyJSON 的 `ETag` 讓條件請求可以回 304。
 - **DummyJSON 使用 `select=`**：payload 減少約 60%。
@@ -260,6 +277,7 @@ graph TD
 - `AppClock { fun now(): Instant }` → 測試用 `FakeClock`（可 `advanceBy(Duration)`）。
 - `NetworkMonitor { val status: Flow<NetworkStatus> }` → 測試用 `FakeNetworkMonitor`（`MutableStateFlow`）。
 - `FreshnessPolicy` 是純函式、`refreshTriggers` 是純 Flow 函式、`DefaultFeedRefresher` 只依賴 interface → 全部 JVM 單元測試。
+- `ArticleRemoteMediator.initialize()` 注入同一個 `FreshnessPolicy` + `FakeClock` + `FakeNetworkMonitor`，可直接斷言 `LAUNCH_INITIAL_REFRESH` / `SKIP_INITIAL_REFRESH`。
 - 所有時間用 `java.time.Instant/Duration/LocalDate`（Android module 開啟 core library desugaring 以支援 minSdk 24）。
 
 ---
@@ -269,7 +287,7 @@ graph TD
 ### 4.1 資料模型關係
 
 ```
-feed_articles  (可拋棄的快取；刷新可能清空、超過 300 筆會修剪)
+feed_articles  (可拋棄的快取；每次 REFRESH 成功都會清空重建)
      │  id 相同時，UI 以 bookmarkedIds 標示「已收藏」
      ▼
 bookmarks      (使用者資料；完整快照 + localImagePath；永不因刷新而刪除)
@@ -277,7 +295,7 @@ bookmarks      (使用者資料；完整快照 + localImagePath；永不因刷�
 
 - **收藏 ≠ feed 快取上的布林欄位**。理由：feed 快取會被清空/修剪；若收藏只是 flag，清快取就會失去收藏內容。
 - 收藏時複製文章完整欄位到 `bookmarks`（title、summary、newsSite、url、imageUrl、authors、publishedAt、savedAt）。
-- Feed 顯示收藏狀態：`combine(feedDao.observeAll(), bookmarkDao.observeIds())` → `Article.isBookmarked`。
+- Feed 顯示收藏狀態：Room `PagingSource` 查詢 `feed_articles LEFT JOIN bookmarks` 直接帶出 `isBookmarked`；收藏變動使 PagingSource invalidate，列表自動更新（LazyColumn 以 key 保持位置）。
 - 詳情頁資料來源優先序：`bookmarks` 快照 → `feed_articles`（`observeArticle(id)` 以 `combine` 兩個 DAO flow 實作）。因此從 Saved 點進去、即使 feed 快取已清空，也能離線閱讀。
 - 取消收藏：刪 row + 刪本地圖片檔。
 
@@ -317,8 +335,8 @@ Spaceflight API 只有 `summary`（已驗證 detail endpoint 欄位與 list 相�
 | 條件 | 呈現 |
 |---|---|
 | 沒有快取、正在刷新 | 整頁 Loading（skeleton 3 張卡） |
-| 沒有快取、離線 | 整頁 Offline：「目前離線，無法載入最新內容」+ 按鈕「前往已收藏」；恢復連線時自動刷新（`NETWORK_RESTORED`） |
-| 沒有快取、刷新失敗 | 整頁 Error：錯誤訊息（依 `AppError` 類型）+「重試」（`USER_PULL`） |
+| 沒有快取、離線 | 整頁 Offline：「目前離線，無法載入最新內容」+ 按鈕「前往已收藏」；恢復連線時協調器發出文章刷新請求（`NETWORK_RESTORED`）→ `refresh()` |
+| 沒有快取、刷新失敗 | 整頁 Error：錯誤訊息（依 `AppError` 類型）+「重試」（`lazyPagingItems.refresh()` + `onPullToRefresh()`） |
 | 沒有快取、刷新成功但 0 筆 | 整頁 Empty +「重新整理」 |
 | 有快取 | 列表。背景 SWR 刷新**不顯示大轉圈**，只有 `USER_PULL` 顯示 pull-to-refresh 指示器 |
 | 有快取、刷新失敗 | 保留列表，snackbar「無法更新，顯示 X 前的內容」 |
@@ -327,8 +345,23 @@ Spaceflight API 只有 `summary`（已驗證 detail endpoint 欄位與 list 相�
 | 天氣卡 | 獨立狀態：有資料（過舊時顯示「X 前更新」警示）/ 無資料且載入中（skeleton）/ 無資料且失敗（精簡的「天氣暫時無法取得」列，不擋文章） |
 | 服務卡 | 沒資料就不插入（不顯示錯誤；它是次要內容） |
 
-`deriveFullScreenState(hasArticles, articlesInFlight, lastArticlesResult, network): FullScreenState?` 規則：
-`hasArticles → null`；`network == OFFLINE → Offline`；`articlesInFlight || lastArticlesResult == null → Loading`；`lastArticlesResult is Failed → Error(error)`；否則 `Empty`。
+**LoadState → 畫面狀態（v2，Paging 3）**：UI 端呼叫純函式
+`deriveFeedScreenState(loadStates: CombinedLoadStates, itemCount: Int, isOffline: Boolean): FeedScreenState`（放 `feature:feed`，單元測試），回傳 `FeedScreenState(fullScreen: FullScreenState?, footer: FooterState, refreshError: AppError?)`。
+`refresh` 取 `loadStates.mediator?.refresh ?: loadStates.refresh`（網路狀態以 mediator 為準；`source.refresh` 只是讀 DB）。
+
+整頁（`itemCount == 0`）依序判斷：
+1. `refresh is Loading` → `Loading`
+2. `isOffline` → `Offline`
+3. `refresh is Error` → `Error(error.toAppError())`
+4. `refresh is NotLoading && loadStates.append.endOfPaginationReached` → `Empty`（REFRESH 成功且回 0 筆時 mediator 會標記 end）
+5. 其他（例如第一個 frame，什麼都還沒開始）→ `Loading`（避免 Empty 閃一下）
+
+有內容（`itemCount > 0`）：`fullScreen = null`；
+- `refresh is Error` → `refreshError` 非 null → 畫面以 `LaunchedEffect(refreshError)` 顯示 snackbar「無法更新，顯示 X 前的內容」（X 來自 `FeedUiState.lastUpdated`）。
+- Footer（`loadStates.append`）：`Loading` → `FooterState.Loading`；`Error` 且 `isOffline`（或 error 是 `OfflineException`）→ `FooterState.Offline`；`Error` → `FooterState.Error`（按鈕呼叫 `lazyPagingItems.retry()`）；`NotLoading(endOfPaginationReached = true)` → `FooterState.End`；否則 `FooterState.None`。
+
+Pull-to-refresh 指示器：`isUserRefreshing = pullRequested && (refresh is Loading || uiState.isRefreshingOtherSources)`；`pullRequested` 是畫面上的 `rememberSaveable` 旗標，下拉時設為 true、refresh 回到 NotLoading 後清掉。背景（initialize / 回前景請求）的刷新不顯示指示器。
+網路恢復時若 footer 是 Offline/Error，畫面自動呼叫 `lazyPagingItems.retry()`。
 
 ### 5.3 Detail
 
@@ -352,26 +385,28 @@ Spaceflight API 只有 `summary`（已驗證 detail endpoint 欄位與 list 相�
 ### 5.5 UiState 型別
 
 ```kotlin
-// feature:feed
+// feature:feed —— 非分頁狀態（StateFlow）
 data class FeedUiState(
-    val items: List<FeedItem> = emptyList(),
-    val fullScreen: FullScreenState? = FullScreenState.Loading,
-    val isUserRefreshing: Boolean = false,
-    val appendState: AppendState = AppendState.Idle,
+    val weather: WeatherCardState = WeatherCardState.Loading,
     val isOffline: Boolean = false,
-    val lastUpdated: Instant? = null,
+    val lastUpdated: Instant? = null,                 // 文章 lastSuccessAt，用於 snackbar/banner 的「X 前」
+    val isRefreshingOtherSources: Boolean = false,    // 天氣/服務卡的 USER_PULL 刷新中
+    val pendingArticleRefreshId: Long? = null,        // 協調器要求刷新文章；畫面處理後呼叫 onArticleRefreshHandled(id)
     val userMessage: UserMessage? = null,
 )
-sealed interface FullScreenState { data object Loading; data object Empty; data object Offline; data class Error(val error: AppError) }
-sealed interface AppendState { data object Idle; data object Loading; data object EndReached; data object Offline; data class Error(val error: AppError) }
+// feature:feed —— 分頁內容（Flow<PagingData<FeedItem>>，不進 UiState）
 sealed interface FeedItem {
     val key: String; val contentType: String
-    data class WeatherHero(val state: WeatherCardState)            // key = "weather"
-    data class TopStory(val article: Article)                      // key = "article-{id}"
-    data class ArticleRow(val article: Article)                    // key = "article-{id}"
-    data class Service(val card: ServiceCard, val slot: Int)       // key = "service-{id}-{slot}"
+    data class TopStory(val article: Article, val sortIndex: Long)       // key = "article-{id}"
+    data class ArticleRow(val article: Article, val sortIndex: Long)     // key = "article-{id}"
+    data class Service(val card: ServiceCard, val slot: Int)             // key = "service-{slot}"
 }
+// 天氣 hero 不是 FeedItem：LazyColumn 的第一個 item(key = "weather")
 sealed interface WeatherCardState { data object Loading; data object Unavailable; data class Available(val weather: Weather, val isOutdated: Boolean) }
+// 由 LoadState 推導（UI 端純函式，§5.2）
+data class FeedScreenState(val fullScreen: FullScreenState?, val footer: FooterState, val refreshError: AppError?)
+sealed interface FullScreenState { data object Loading; data object Empty; data object Offline; data class Error(val error: AppError) }
+enum class FooterState { None, Loading, Error, Offline, End }
 
 // feature:detail
 sealed interface DetailUiState { data object Loading; data object NotFound; data class Content(val article: Article, val isOffline: Boolean) }
@@ -445,6 +480,7 @@ interface SpaceflightApi {
 data class Article(val id: Long, val title: String, val summary: String, val newsSite: String, val url: String,
                    val imageUrl: String?, val publishedAt: Instant, val authors: List<String>, val isBookmarked: Boolean)
 data class SavedArticle(val article: Article, val savedAt: Instant, val localImagePath: String?)
+data class FeedArticle(val article: Article, val sortIndex: Long)   // v2：Paging 的元素；sortIndex 供服務卡穿插規則使用
 data class Weather(val locationName: String, val current: CurrentWeather, val daily: List<DailyForecast>, val fetchedAt: Instant)
 data class CurrentWeather(val temperatureC: Double, val condition: WeatherCondition, val isDay: Boolean, val observedAt: LocalDateTime)
 data class DailyForecast(val date: LocalDate, val condition: WeatherCondition, val maxC: Double, val minC: Double)
@@ -455,11 +491,12 @@ enum class ContentSource { WEATHER, ARTICLES, SERVICES }
 enum class AppError { OFFLINE, TIMEOUT, SERVER, PARSE, UNKNOWN }
 ```
 
-### 6.5 Room entity（`core:data`，DB version 1）
+### 6.5 Room entity（`core:data`，DB version 1；v2 新增 `sortIndex` 與 `remote_keys`）
 
 | 表 | 欄位 | 主鍵 / 索引 | 說明 |
 |---|---|---|---|
-| `feed_articles` | id, title, summary, newsSite, url, imageUrl?, publishedAtMillis, updatedAtMillis?, authors (以 `\u001F` 串接的 String，或 TypeConverter), featured, fetchedAtMillis | PK id；index(publishedAtMillis) | 可拋棄快取 |
+| `feed_articles` | id, **sortIndex (Long)**, title, summary, newsSite, url, imageUrl?, publishedAtMillis, updatedAtMillis?, authors (以 `\u001F` 串接的 String，或 TypeConverter), featured, fetchedAtMillis | PK id；**unique index(sortIndex)**；index(publishedAtMillis) | 可拋棄快取。`sortIndex` 由 mediator 指派：REFRESH 從 0 重排、APPEND 從 max+1 接續；PagingSource 依它排序 |
+| `remote_keys` | feed (TEXT PK，目前只有 `"articles"`), nextCursorPublishedAtMillis?, endOfPaginationReached (Boolean), updatedAtMillis | PK feed | v2：**每個 feed 一列**（不是每篇文章一列）。keyset 分頁只需要「下一頁游標 + 是否到底」，逐篇 remote key 在此是多餘的；程序重啟後 APPEND 仍能接續 |
 | `bookmarks` | articleId, title, summary, newsSite, url, imageUrl?, localImagePath?, publishedAtMillis, authors, savedAtMillis | PK articleId；index(savedAtMillis) | 使用者資料，完整快照 |
 | `weather_snapshot` | locationKey ("taipei"), locationName, tempC, weatherCode, isDay, observedAtLocal (String), dailyJson (String, kotlinx.serialization), fetchedAtMillis | PK locationKey | daily 用 JSON 欄位：永遠整批讀寫，不需要 SQL 查詢 → 不值得另開表 |
 | `service_cards` | id, title, description, imageUrl?, ctaLabel, actionUrl, position | PK id | 刷新時整批替換（transaction） |
@@ -468,11 +505,15 @@ enum class AppError { OFFLINE, TIMEOUT, SERVER, PARSE, UNKNOWN }
 時間在 entity 一律存 `Long`（epoch millis），mapper 轉 `Instant`——避免 TypeConverter 隱式行為，也讓 SQL 排序直觀。
 
 DAO 關鍵查詢：
-- `FeedArticleDao`：`observeAll(): Flow<List<FeedArticleEntity>>`（ORDER BY publishedAtMillis DESC, id DESC）、`observeById(id)`、`upsertAll(list)`、`deleteAll()`、`existingIds(ids: List<Long>): List<Long>`、`oldestPublishedAt(): Long?`、`count()`、`trimTo(max: Int)`（`DELETE WHERE id NOT IN (SELECT id ... ORDER BY ... LIMIT :max)`）。
+- `FeedArticleDao`（v2）：
+  - `pagingSource(): PagingSource<Int, FeedArticleWithBookmark>`——`SELECT f.*, (b.articleId IS NOT NULL) AS isBookmarked FROM feed_articles f LEFT JOIN bookmarks b ON b.articleId = f.id ORDER BY f.sortIndex ASC`（`FeedArticleWithBookmark` = `@Embedded FeedArticleEntity` + `isBookmarked: Boolean`；需 `room-paging`）
+  - `observeById(id)`、`insertAll(list)`（`OnConflictStrategy.IGNORE`：邊界重複不覆蓋既有 sortIndex）、`clearAll()`、`existingIds(ids: List<Long>): List<Long>`、`maxSortIndex(): Long?`、`count()`
+  - v1 的 `observeAll()`、`oldestPublishedAt()`、`trimTo()` 移除（若 Step 5 已實作，於 Step 6 刪除）
+- `RemoteKeyDao`（v2）：`get(feed): RemoteKeyEntity?`、`upsert(key)`、`clear(feed)`
 - `BookmarkDao`：`observeAll(query: String): Flow<List<BookmarkEntity>>`（`WHERE title LIKE '%'||:q||'%' ESCAPE '\' OR newsSite LIKE ...` ORDER BY savedAtMillis DESC；呼叫端先 escape `%` `_` `\`）、`observeIds(): Flow<List<Long>>`、`observeById(id)`、`upsert`、`delete(id)`、`pendingImageDownloads(): List<BookmarkEntity>`、`updateLocalImagePath(id, path)`。
 - `WeatherDao`、`ServiceCardDao`、`SyncMetadataDao`（`observeAll(): Flow<List<SyncMetadataEntity>>`、`get(source)`、`markSuccess(source, at)`、`markFailure(source, at, error)`）。
 
-Mapper（`core:data/.../mapper/`，全部是 top-level pure function，逐一單元測試）：`ArticleDto.toEntity(fetchedAt)`、`FeedArticleEntity.toDomain(isBookmarked)`、`BookmarkEntity.toDomain()`、`Article.toBookmarkEntity(savedAt)`、`ForecastResponseDto.toEntity(fetchedAt)`、`WeatherSnapshotEntity.toDomain(today: LocalDate)`、`ProductDto.toEntity(position)`、`ServiceCardEntity.toDomain()`、`Throwable.toAppError()`（`UnknownHostException/ConnectException → OFFLINE`、`SocketTimeoutException → TIMEOUT`、`HttpException → SERVER`、`SerializationException → PARSE`）。
+Mapper（`core:data/.../mapper/`，全部是 top-level pure function，逐一單元測試）：`ArticleDto.toEntity(sortIndex, fetchedAt)`、`FeedArticleWithBookmark.toDomain(): FeedArticle`、`FeedArticleEntity.toDomain(isBookmarked)`、`BookmarkEntity.toDomain()`、`Article.toBookmarkEntity(savedAt)`、`ForecastResponseDto.toEntity(fetchedAt)`、`WeatherSnapshotEntity.toDomain(today: LocalDate)`、`ProductDto.toEntity(position)`、`ServiceCardEntity.toDomain()`、`Throwable.toAppError()`（`UnknownHostException/ConnectException → OFFLINE`、`SocketTimeoutException → TIMEOUT`、`HttpException → SERVER`、`SerializationException → PARSE`）。
 
 ---
 
@@ -513,16 +554,16 @@ Convention plugins 內容：
 - **AGP 9 內建 Kotlin：不要 apply `org.jetbrains.kotlin.android`**。為避開 AGP 9 `CommonExtension` 泛型變動，application 與 library plugin 各自 `extensions.configure<ApplicationExtension>` / `configure<LibraryExtension>`，共用邏輯抽成接受 lambda 的小函式即可。
 - 若 convention plugins 與 AGP 9 API 纏鬥超過 30 分鐘：退回在各 module 直接寫設定（重複但可接受），並在 NOTES 記錄。
 
-### 7.1 `core:domain`（純 JVM；依賴：kotlinx-coroutines-core）
+### 7.1 `core:domain`（純 JVM；依賴：kotlinx-coroutines-core、v2 加 `androidx.paging:paging-common`（KMP，有 JVM artifact））
 
 ```
 com.waynejiang.linefeed.core.domain
-├── model/        Article, SavedArticle, Weather, CurrentWeather, DailyForecast, WeatherCondition, ServiceCard,
+├── model/        Article, SavedArticle, FeedArticle, Weather, CurrentWeather, DailyForecast, WeatherCondition, ServiceCard,
 │                 NetworkStatus, ContentSource, AppError
 ├── time/         interface AppClock { fun now(): Instant }
 ├── network/      interface NetworkMonitor { val status: Flow<NetworkStatus> }
 ├── freshness/    TtlConfig, RefreshTrigger, RefreshDecision, SkipReason, FreshnessPolicy
-├── refresh/      SourceResult, RefreshReport, RefreshStatus, LoadMoreResult, interface FeedRefresher
+├── refresh/      SourceResult, RefreshReport, RefreshStatus, interface FeedRefresher   （v2 移除 LoadMoreResult）
 ├── repository/   ArticleRepository, BookmarkRepository, WeatherRepository, ServiceCardRepository
 └── util/         suspend fun <T> suspendRunCatching(block: suspend () -> T): Result<T>   // 重新拋出 CancellationException
                   class SingleFlight<K : Any, V>(scope: CoroutineScope) { suspend fun run(key: K, block: suspend () -> V): V }
@@ -548,17 +589,15 @@ data class RefreshStatus(
     val userInitiated: Boolean = false,                     // 只有 USER_PULL 才讓 UI 顯示下拉指示器
     val lastResults: Map<ContentSource, SourceResult> = emptyMap(),
     val lastSuccessAt: Map<ContentSource, Instant> = emptyMap(),
+    val articleRefreshRequestId: Long = 0,                  // v2：FOREGROUND/NETWORK_RESTORED 且文章過期時遞增；Feed 畫面據此呼叫 lazyPagingItems.refresh()
 )
 interface FeedRefresher {
     val status: StateFlow<RefreshStatus>
     suspend fun refresh(trigger: RefreshTrigger): RefreshReport
 }
-sealed interface LoadMoreResult { data class Loaded(val newItems: Int); data object EndReached; data class Failed(val error: AppError) }
-
 interface ArticleRepository {
-    fun observeFeed(): Flow<List<Article>>              // 已合併 isBookmarked
+    fun feedPagingData(): Flow<PagingData<FeedArticle>>  // v2：Pager + ArticleRemoteMediator；已含 isBookmarked；VM 必須 cachedIn
     fun observeArticle(id: Long): Flow<Article?>        // 收藏快照優先，其次 feed 快取
-    suspend fun loadNextPage(): LoadMoreResult          // 內部 single-flight；快取為空時直接回 Loaded(0)、不打網路（第一頁只由 FeedRefresher 負責；VM 也不會在空列表時呼叫）
 }
 interface BookmarkRepository {
     fun observeSaved(query: String = ""): Flow<List<SavedArticle>>
@@ -569,7 +608,7 @@ interface BookmarkRepository {
 interface WeatherRepository { fun observeWeather(): Flow<Weather?> }
 interface ServiceCardRepository { fun observeServiceCards(): Flow<List<ServiceCard>> }
 ```
-（各來源的 `refresh()` 不放在 domain interface：刷新只能經由 `FeedRefresher`，由它套用新鮮度政策。data 層內部以 `internal interface SourceRefresher { val source: ContentSource; suspend fun refresh(): SourceResult }` 實作。）
+（各來源的 `refresh()` 不放在 domain interface：天氣/服務卡的刷新只能經由 `FeedRefresher`，由它套用新鮮度政策；文章只能經由 `ArticleRemoteMediator`。data 層內部以 `internal interface SourceRefresher { val source: ContentSource; suspend fun refresh(): SourceResult }` 實作，**只有 WEATHER 與 SERVICES 兩個實作**。）
 
 另：`fun refreshTriggers(isForeground: Flow<Boolean>, network: Flow<NetworkStatus>): Flow<RefreshTrigger>` 放在 `refresh/RefreshTriggers.kt`（純 Flow 邏輯）：
 - 第一次 `isForeground == true` → `COLD_START`；之後每次 false→true → `FOREGROUND`
@@ -592,9 +631,15 @@ com.waynejiang.linefeed.core.data
 │   ├── LineFeedDatabase, entity/…, dao/…, Converters（僅 dailyJson）
 ├── mapper/ ArticleMappers.kt, WeatherMappers.kt, ServiceCardMappers.kt, ErrorMappers.kt
 ├── repository/
-│   ├── OfflineFirstArticleRepository : ArticleRepository, SourceRefresher(ARTICLES)
-│   │     refresh(): 抓第一頁 → transaction{ 有重疊? upsert : deleteAll+insert; trimTo(300); markSuccess }
-│   │     loadNextPage(): cursor = oldestPublishedAt → fetch → 新 id 數 → upsert → Loaded/EndReached
+│   ├── ArticleRemoteMediator : RemoteMediator<Int, FeedArticleWithBookmark>   （v2）
+│   │     依賴 LineFeedDatabase, ArticleRemoteDataSource, FreshnessPolicy, NetworkMonitor, AppClock
+│   │     initialize(): policy.evaluate(ARTICLES, lastSuccessAt, network, COLD_START) → LAUNCH / SKIP_INITIAL_REFRESH
+│   │     load(REFRESH): fetchPage(20, null) → db.withTransaction{ clearAll; insert sortIndex 0..; remoteKey; markSuccess }
+│   │     load(APPEND): 離線→Error；remoteKey 無→Success(false)；fetchPage(20, cursor) → 濾 existingIds → insert sortIndex max+1..；更新 remoteKey
+│   │     load(PREPEND): Success(endOfPaginationReached = true)；失敗一律 markFailure + MediatorResult.Error
+│   ├── OfflineFirstArticleRepository : ArticleRepository   （v2：不再是 SourceRefresher）
+│   │     feedPagingData() = Pager(config, remoteMediator = mediator) { feedDao.pagingSource() }.flow.map { it.map(::toDomain) }
+│   │     mediator 以 `Provider<ArticleRemoteMediator>` 注入，每次建立 Pager 取新實例
 │   ├── OfflineFirstWeatherRepository : WeatherRepository, SourceRefresher(WEATHER)
 │   ├── OfflineFirstServiceCardRepository : ServiceCardRepository, SourceRefresher(SERVICES)
 │   └── DefaultBookmarkRepository : BookmarkRepository
@@ -603,6 +648,8 @@ com.waynejiang.linefeed.core.data
 │         依賴 FreshnessPolicy, NetworkMonitor, SyncMetadataDao, Set<SourceRefresher>, SingleFlight, AppClock
 │         refresh(trigger) = coroutineScope { 逐來源 async { evaluate → Skip 或 singleFlight.run(source){ refresher.refresh() } } }.awaitAll()
 │         一個來源失敗不影響其他（各自 suspendRunCatching）；更新 status（inFlight / userInitiated / lastResults）
+│         v2：文章不經 SourceRefresher——trigger ∈ {FOREGROUND, NETWORK_RESTORED} 且 policy 對 ARTICLES 回 Fetch
+│             → status.articleRefreshRequestId++（COLD_START 交給 initialize()、USER_PULL 由 UI refresh() 處理）
 ├── network/ConnectivityNetworkMonitor : NetworkMonitor   # callbackFlow + registerDefaultNetworkCallback；
 │         NET_CAPABILITY_INTERNET && VALIDATED → online；NOT_METERED → UNMETERED；distinctUntilChanged；
 │         conflate；初始值取 activeNetwork 的 capabilities
@@ -610,7 +657,7 @@ com.waynejiang.linefeed.core.data
 └── di/
     ├── NetworkModule   (Json, OkHttpClient+Cache, 3×Retrofit, 3×Api)
     ├── DatabaseModule  (Room.databaseBuilder, DAOs)
-    ├── DataModule      (@Binds 各 repository/NetworkMonitor/AppClock/FeedRefresher；@IntoSet SourceRefresher；@Provides FreshnessPolicy)
+    ├── DataModule      (@Binds 各 repository/NetworkMonitor/AppClock/FeedRefresher；@IntoSet SourceRefresher（僅 WEATHER、SERVICES）；@Provides FreshnessPolicy)
     └── CoroutinesModule(@IoDispatcher, @ApplicationScope)
 ```
 
@@ -628,29 +675,40 @@ format/ WeatherConditionUi: WeatherCondition → (ImageVector, @StringRes label)
 ```
 FakeClock(initial: Instant) : AppClock { fun advanceBy(d: Duration); fun set(i: Instant) }
 FakeNetworkMonitor(initial = UNMETERED) : NetworkMonitor { fun set(status) }
-FakeArticleRepository : ArticleRepository     # MutableStateFlow<List<Article>>；nextPageResults: ArrayDeque<LoadMoreResult>；
-                                              # 可選 gate: CompletableDeferred<Unit> 控制 loadNextPage 何時完成；記錄呼叫次數
+FakeArticleRepository : ArticleRepository     # v2：MutableStateFlow<List<FeedArticle>> → feedPagingData() = map { PagingData.from(it) }
+                                              # （`PagingData.from` 來自 paging-common，JVM 可用）；observeArticle 由同一份資料提供
 FakeBookmarkRepository, FakeWeatherRepository, FakeServiceCardRepository
 FakeFeedRefresher : FeedRefresher             # 記錄 triggers；可設定回傳的 RefreshReport；可 gate
 MainDispatcherRule(testDispatcher = UnconfinedTestDispatcher()) : TestWatcher
-TestData: fun article(id: Long, publishedAt: Instant = ..., …): Article；weather(...)；serviceCard(...)
+TestData: fun article(id: Long, publishedAt: Instant = ..., …): Article；feedArticle(id, sortIndex)；weather(...)；serviceCard(...)
 ```
 
-### 7.5 `feature:feed`
+### 7.5 `feature:feed`（v2：Paging 3；依賴加 `paging-compose`，測試加 `paging-testing`）
 ```
 FeedRoute (@Serializable data object), NavGraphBuilder.feedScreen(onArticleClick: (Long) -> Unit, onOpenSaved: () -> Unit)
 FeedViewModel(@HiltViewModel; ArticleRepository, WeatherRepository, ServiceCardRepository, BookmarkRepository,
-              FeedRefresher, NetworkMonitor, FreshnessPolicy? → 用於 isOutdated；AppClock)
-    val uiState: StateFlow<FeedUiState>
-    fun onPullToRefresh(); fun onRetry(); fun onNearEnd(); fun onRetryAppend()
+              FeedRefresher, NetworkMonitor, FreshnessPolicy（isOutdated 用）)
+    val feedItems: Flow<PagingData<FeedItem>>
+        = articleRepository.feedPagingData().cachedIn(viewModelScope)          // ① 先 cachedIn，才能被 combine 重複收集
+            .combine(serviceCardRepository.observeServiceCards()) { pd, services -> pd.toFeedItems(services) }
+            .cachedIn(viewModelScope)                                           // ② 轉換結果也快取，config change 不重算
+    val uiState: StateFlow<FeedUiState>                                         // 天氣、離線、lastUpdated、刷新請求、訊息
+    fun onPullToRefresh()                    // refresher.refresh(USER_PULL)（天氣/服務卡）；文章由畫面呼叫 lazyPagingItems.refresh()
+    fun onArticleRefreshHandled(id: Long)    // 畫面處理完 pendingArticleRefreshId 後回報
     fun onToggleBookmark(article: Article); fun onUserMessageShown(id: Long)
-FeedUiState.kt, FeedItem.kt, FullScreenState.kt, AppendState.kt, deriveFullScreenState()
-FeedAssembler (object 或 class): fun assemble(weather: WeatherCardState?, articles: List<Article>, services: List<ServiceCard>,
-                                             firstServiceAfter: Int = 3, serviceEvery: Int = 6): List<FeedItem>
-FeedScreen.kt (stateful: hiltViewModel + collectAsStateWithLifecycle) / FeedContent (stateless, 可 Preview)
-cells/ WeatherHeroCard, TopStoryCard, ArticleRowCell, ServiceCardCell, AppendFooter
+FeedPagingTransforms.kt:
+    fun PagingData<FeedArticle>.toFeedItems(services: List<ServiceCard>, slots: ServiceCardSlots = ServiceCardSlots()): PagingData<FeedItem>
+        // map：sortIndex == 0 → TopStory，其餘 ArticleRow；insertSeparators：after 為文章且 slots.slotBefore(after.sortIndex) != null
+        //       且 services 非空 → Service(services[slot % size], slot)
+ServiceCardSlots(firstAfter: Int = 3, every: Int = 6) { fun slotBefore(sortIndex: Long): Int? }       // 純函式
+FeedScreenState.kt: deriveFeedScreenState(loadStates: CombinedLoadStates, itemCount: Int, isOffline: Boolean): FeedScreenState  // §5.2
+FeedUiState.kt, FeedItem.kt, WeatherCardState.kt
+FeedScreen.kt (stateful: hiltViewModel、collectAsStateWithLifecycle、collectAsLazyPagingItems、
+               LaunchedEffect(pendingArticleRefreshId) { lazyPagingItems.refresh(); listState.scrollToItem(0); vm.onArticleRefreshHandled(id) })
+FeedContent (stateless，可 Preview)：LazyColumn { item("weather"){…}; items(lazyPagingItems.itemCount, key = itemKey{it.key}, contentType = itemContentType{it.contentType}){…}; item("footer"){…} }
+cells/ WeatherHeroCard, TopStoryCard, ArticleRowCell, ServiceCardCell, FeedFooter
 ```
-FeedAssembler 規則：`[WeatherHero]` + 第一篇 `TopStory` + 其餘 `ArticleRow`；第 3 篇文章之後插第一張服務卡，之後每 6 篇插一張，服務卡循環使用；沒有服務卡就不插；沒有文章時回傳空列表（由 fullScreen 狀態接手）。
+v1 的 `FeedAssembler`、`AppendState`、`onNearEnd()`/`onRetryAppend()` 全部移除：append 觸發由 Paging 內建（`prefetchDistance`），重試用 `lazyPagingItems.retry()`。
 
 ### 7.6 `feature:detail`
 ```
@@ -689,6 +747,7 @@ AndroidManifest: INTERNET, ACCESS_NETWORK_STATE
 - **Compose UI 1.12.1（BOM 2026.09.00）的 AAR metadata 要求 `minCompileSdk=37`、`minAndroidGradlePluginVersion=9.1.0`**；`core-ktx 1.19.0` 同樣要求 compileSdk 37 → **compileSdk 必須是 37、AGP 必須 ≥ 9.1**。
 - 所有 AAR 的 minSdk ≤ 24（Compose/Room/Coil/core 為 23、navigation-compose 為 24）→ minSdk 24 可行。
 - 本機 SDK：platforms android-35/36/37.0、build-tools 35/36/37 → compileSdk 37 可用。
+- **Paging（v2）**：Paging 最新穩定版為 **3.5.1**（查 `dl.google.com/android/maven2/androidx/paging/group-index.xml`，2026-09-21）；本機快取已有 `paging-common/paging-compose/paging-testing 3.5.1`（9/18 那次成功 build 也用了 `paging-compose 3.5.1`、`paging-testing 3.5.1`、`room-paging 2.8.5`）。`room-paging 2.8.5` 的 Gradle metadata 要求 `paging-common >= 3.3.2` → 與 3.5.1 相容（Gradle 解析為 3.5.1）。`paging-common` 是 KMP，含 JVM artifact，可放在純 JVM 的 `core:domain`。
 - Robolectric 4.17 最高支援 SDK 36，且本機 `~/.m2` 已有 `android-all-instrumented:16-robolectric-...`（API 36）→ **targetSdk 36**、Robolectric 測試標 `@Config(sdk = [36])`。
 
 ### 8.2 `gradle/libs.versions.toml`
@@ -706,6 +765,7 @@ navigationCompose = "2.10.1"
 hilt = "2.60.1"
 androidxHilt = "1.4.0"
 room = "2.8.5"
+paging = "3.5.1"                   # v2
 retrofit = "3.0.0"
 okhttp = "5.5.0"
 kotlinxSerialization = "1.11.0"
@@ -737,6 +797,10 @@ androidx-hilt-lifecycle-viewmodel-compose = { module = "androidx.hilt:hilt-lifec
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+room-paging = { module = "androidx.room:room-paging", version.ref = "room" }                   # v2
+paging-common = { module = "androidx.paging:paging-common", version.ref = "paging" }          # v2：core:domain、core:testing（api）
+paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging" }        # v2：feature:feed
+paging-testing = { module = "androidx.paging:paging-testing", version.ref = "paging" }        # v2：testImplementation（core:data、feature:feed）
 retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
 retrofit-kotlinx-serialization = { module = "com.squareup.retrofit2:converter-kotlinx-serialization", version.ref = "retrofit" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
@@ -771,7 +835,8 @@ hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 room = { id = "androidx.room", version.ref = "room" }
 ```
 
-**不使用**：MockK（見 §9.1）、Paging 3、DataStore、WorkManager、Compose UI test（延後）。
+**不使用**：MockK（見 §9.1）、DataStore、WorkManager、Compose UI test（延後）。
+**`paging-runtime` 刻意不加**：它提供的是 RecyclerView 用的 `PagingDataAdapter`；Compose 只需要 `paging-compose`（傳遞依賴 `paging-common`），`Pager`/`RemoteMediator`/`PagingSource` 都在 `paging-common`。若日後 Room 產生的 PagingSource 編譯要求 runtime，再加 `androidx.paging:paging-runtime:3.5.1`（同版號，Maven 上存在）。
 `androidx-test-ext-junit` 僅在需要 `AndroidJUnit4` runner 的 Robolectric 測試使用（也可直接用 `RobolectricTestRunner`，二選一即可，擇一後移除另一個）。
 
 ### 8.3 Gradle wrapper（本機沒有系統 `gradle`）
@@ -807,7 +872,8 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 
 ### 9.1 原則
 - **Fake 優於 mock**：fake 是真的 interface 實作，有狀態、可重用（放 `core:testing`），測試斷言「結果狀態」而不是「呼叫了哪個方法」，重構內部實作時測試不會壞；Kotlin `final` class、suspend function、Flow 用 mock 很囉唆且脆弱。只有在需要「驗證呼叫次數」時，在 fake 裡加 counter。
-- **Repository 用真的 Room（in-memory，Robolectric）+ fake remote**：cache/網路協調的 bug 大多在 SQL 與 transaction，fake DAO 測不出來。
+- **Repository / RemoteMediator 用真的 Room（in-memory，Robolectric）+ fake remote**：cache/網路協調的 bug 大多在 SQL 與 transaction，fake DAO 測不出來。RemoteMediator 直接呼叫 `initialize()`/`load()` 測（官方建議做法）。
+- **分頁用官方 `paging-testing`**：`TestPager` 測 Room PagingSource；`Flow<PagingData>.asSnapshot()` 測 VM 的轉換與 Repository 的 Pager（需在 `runTest` 中，且 remote 為 fake）。
 - **網路層用 MockWebServer + 真實 JSON fixture**（從 §6 的 curl 結果存成 `core/data/src/test/resources/fixtures/*.json`），驗證 query 參數與解析；**測試永遠不打真實 API**。
 - 所有時間用 `FakeClock`；所有協程用 `runTest` + `StandardTestDispatcher`/`UnconfinedTestDispatcher`；Flow 用 Turbine。
 - Room 測試：`Room.inMemoryDatabaseBuilder(context, LineFeedDatabase::class.java).allowMainThreadQueries().setQueryCoroutineContext(testDispatcher)`；`@RunWith(RobolectricTestRunner::class)` + `@Config(sdk = [36])`。
@@ -849,19 +915,24 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 - `WeatherMappersTest`：平行陣列 zip；長度不一致時取最短並不崩潰；過濾今天之前的日期；本地時間無時區解析
 - `ServiceCardMappersTest`：ctaLabel 四捨五入、discount < 1 → "Open"、actionUrl 格式
 - `ErrorMappersTest`：各例外 → AppError
-- `FeedArticleDaoTest`（Robolectric）：排序 publishedAt DESC, id DESC（同秒以 id 排）；`oldestPublishedAt`；`trimTo` 保留最新 N 筆；`existingIds`
+- `FeedArticleDaoTest`（Robolectric + `TestPager`，v2）：`pagingSource()` 依 sortIndex 排序；LEFT JOIN 正確帶出 `isBookmarked`；`TestPager.refresh()`/`append()` 分頁邊界正確；新增/刪除收藏使 PagingSource invalidate（`pagingSource.invalid == true`）；`insertAll` IGNORE 不覆蓋既有 sortIndex；`maxSortIndex`、`existingIds`、`clearAll`
+- `RemoteKeyDaoTest`：upsert / get / clear
 - `BookmarkDaoTest`：搜尋大小寫不敏感、title 與 newsSite 皆可命中、`%`/`_` 被 escape；`pendingImageDownloads`
-- `OfflineFirstArticleRepositoryTest`（Robolectric + in-memory Room + `FakeArticleRemoteDataSource` + FakeClock）
-  - 空快取 refresh → 寫入第一頁、`sync_metadata.lastSuccessAt = now`
-  - 有重疊的 refresh → 新文章加在前面、舊頁保留
-  - 無重疊（缺口）refresh → 快取被替換，只剩新一頁
-  - refresh 失敗 → 快取不變、lastSuccessAt 不變、lastError 被記錄、回傳 Failed(OFFLINE)
-  - 超過 300 筆時修剪最舊的
-  - `loadNextPage` 用最舊 publishedAt 當游標（斷言 fake 收到的參數）
-  - `loadNextPage` 邊界重複 id 被去重，回傳新增數量正確
-  - 回傳 < pageSize → EndReached；整頁都是已存在 id → EndReached（無限迴圈保護）
-  - 兩個並行 `loadNextPage` → remote 只被呼叫一次
-  - `observeFeed` 反映收藏狀態，收藏/取消後即時更新
+- `ArticleRemoteMediatorTest`（v2；Robolectric + in-memory Room + `FakeArticleRemoteDataSource` + FakeClock + FakeNetworkMonitor；直接呼叫 `mediator.initialize()` 與 `mediator.load(loadType, PagingState(pages = emptyList(), anchorPosition = null, config = PagingConfig(20), leadingPlaceholderCount = 0))`）
+  - `initialize()`：從未成功 → LAUNCH；lastSuccessAt 在 TTL 內 → SKIP；超過 TTL → LAUNCH；metered/unmetered 同一年齡結果不同；OFFLINE → SKIP；lastSuccessAt 在未來 → LAUNCH
+  - REFRESH 成功：寫入第一頁、sortIndex = 0..19、remote key 游標 = 本頁最舊 publishedAt、`sync_metadata.lastSuccessAt = now`、回 `Success(endOfPaginationReached = false)`
+  - REFRESH 在已有資料時：舊資料被清空、sortIndex 從 0 重排（無殘留、無重複）
+  - REFRESH 回傳 < pageSize → `endOfPaginationReached = true`；回 0 筆 → 表為空且 end = true
+  - REFRESH 失敗 → 快取與 remote key 不變、lastSuccessAt 不變、lastError 記錄、回 `MediatorResult.Error`
+  - APPEND 使用 remote key 游標（斷言 fake 收到 `publishedAtLte`）
+  - APPEND 邊界重複 id 被濾掉，新文章 sortIndex 從 max+1 連續接續
+  - APPEND 回傳 < pageSize → end；整頁皆為既有 id → end（無限迴圈保護）
+  - APPEND 在 remote key 不存在時 → `Success(false)` 且未呼叫 remote
+  - APPEND 在 OFFLINE → `MediatorResult.Error` 且未呼叫 remote
+  - PREPEND → `Success(true)`
+- `OfflineFirstArticleRepositoryTest`（v2）
+  - `feedPagingData().asSnapshot()`（paging-testing）在 remote 有兩頁資料時，`asSnapshot { appendScrollWhile { it.sortIndex < 25 } }` 取得跨頁結果、順序正確、無重複 id
+  - 收藏狀態反映在 `FeedArticle.article.isBookmarked`
   - `observeArticle`：feed 快取被清空後仍能從收藏快照取得；兩邊都沒有 → null
 - `OfflineFirstWeatherRepositoryTest`：refresh 寫入 snapshot 與 metadata；失敗保留舊資料；observe 過濾過期日期（FakeClock 前進一天）
 - `OfflineFirstServiceCardRepositoryTest`：refresh 整批替換且保留順序；失敗保留舊資料
@@ -871,10 +942,11 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
   - 取消收藏 → row 與檔案都刪除
   - 收藏在 feed 快取清空後仍存在
   - 無圖片 URL 的文章 → 不嘗試下載
-- `DefaultFeedRefresherTest`（fake SourceRefresher ×3 + in-memory 或 fake metadata + FakeClock + FakeNetworkMonitor）
+- `DefaultFeedRefresherTest`（fake SourceRefresher ×2（WEATHER、SERVICES）+ in-memory 或 fake metadata + FakeClock + FakeNetworkMonitor）
   - COLD_START：只刷新過期的來源（例如天氣過期、文章新鮮 → 只打天氣）
   - OFFLINE：不打任何來源，report 全為 Skipped(OFFLINE)
-  - USER_PULL：三個來源都打，`status.userInitiated == true` 期間為真、結束後 false（Turbine）
+  - USER_PULL：天氣與服務卡都打，`status.userInitiated == true` 期間為真、結束後 false（Turbine）；`articleRefreshRequestId` 不變（文章由 UI refresh 處理）
+  - v2 文章請求：FOREGROUND 且文章過期 → `articleRefreshRequestId` +1；文章新鮮 → 不變；COLD_START → 不變（交給 initialize）；OFFLINE → 不變；NETWORK_RESTORED 且過期 → +1
   - 一個來源失敗，其他仍成功；report 反映各自結果
   - 同時兩次 refresh → 每個來源只被呼叫一次（single-flight）
   - `status.inFlight` 在執行中包含該來源、完成後清空（用 gate 控制 fake 完成時機）
@@ -883,23 +955,18 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 **`core:designsystem`**
 - `RelativeTimeFormatterTest`：<1 分 "Just now"、59 分、1 小時邊界、23 小時、1 天、6 天、7 天以上 → 絕對日期、**未來時間 → 絕對日期**
 
-**`feature:feed`**
-- `FeedAssemblerTest`：天氣永遠第一；第一篇是 TopStory；服務卡位置（第 3 篇後、之後每 6 篇）；服務卡不足時循環且 key 唯一；無服務卡不插入；無文章 → 空列表；所有 key 唯一
-- `DeriveFullScreenStateTest`：§5.2 規則表每一列
+**`feature:feed`**（v2）
+- `ServiceCardSlotsTest`（純函式）：sortIndex 0–2 → null；3 → slot 0；4–8 → null；9 → slot 1；15 → slot 2；自訂 firstAfter/every；負數或極大值不崩潰
+- `FeedPagingTransformsTest`（`flowOf(PagingData.from(feedArticles)).map { it.toFeedItems(services) }.asSnapshot()`）：sortIndex 0 → TopStory、其餘 ArticleRow；服務卡出現在正確位置；服務卡不足時循環；services 為空 → 不插入；**所有 key 唯一**；articles 為空 → 空列表
+- `DeriveFeedScreenStateTest`：§5.2 每條規則（以手工建立的 `CombinedLoadStates`/`LoadStates` 測）：0 筆 + mediator refresh Loading → Loading；0 筆 + offline → Offline；0 筆 + refresh Error → Error(對應 AppError)；0 筆 + NotLoading + append end → Empty；0 筆 + 初始 NotLoading(end=false) → Loading；有內容 + refresh Error → refreshError 非 null 且 fullScreen null；append Loading/Error/Offline/End → 對應 FooterState
 - `FeedViewModelTest`（全部 fake + MainDispatcherRule）
-  - 無快取 + 刷新中 → fullScreen = Loading
-  - 無快取 + OFFLINE → Offline；網路恢復且文章出現 → 列表
-  - 無快取 + 刷新失敗 → Error；`onRetry()` → refresher 收到 USER_PULL
-  - 有快取 + 背景刷新中 → 顯示列表、`isUserRefreshing == false`
-  - `onPullToRefresh()` → USER_PULL、`isUserRefreshing` true→false
-  - 有快取 + 刷新失敗 → userMessage 出現；`onUserMessageShown` 清除
-  - 有快取 + OFFLINE → `isOffline == true`、列表仍在
-  - `onNearEnd()` → loadNextPage 被呼叫一次；Loading 期間再呼叫被忽略（用 gate）
-  - loadNextPage Failed → appendState Error；`onRetryAppend()` 重試
-  - EndReached 之後 `onNearEnd()` 不再呼叫 repository；USER_PULL 刷新成功後重置為 Idle
-  - OFFLINE 時 `onNearEnd()` → appendState Offline，不呼叫 repository
-  - `onToggleBookmark` → BookmarkRepository 被更新，列表中 isBookmarked 反映
-  - 天氣：無資料+天氣 in-flight → WeatherCardState.Loading；失敗 → Unavailable；lastSuccessAt 過舊 → isOutdated
+  - `feedItems.asSnapshot()`：fake 文章 + 服務卡 → 組合正確；服務卡 flow 更新後重新組合
+  - 天氣：無資料 + 天氣 in-flight → `WeatherCardState.Loading`；lastResults 為 Failed 且無資料 → Unavailable；有資料 → Available；lastSuccessAt 過舊 → `isOutdated == true`
+  - `onPullToRefresh()` → FakeFeedRefresher 收到 USER_PULL；`isRefreshingOtherSources` true→false（gate 控制）
+  - 協調器 `articleRefreshRequestId` 遞增 → `pendingArticleRefreshId` 出現；`onArticleRefreshHandled(id)` 後清除；同一 id 不重複出現
+  - 天氣/服務卡刷新失敗（USER_PULL）→ userMessage 出現；`onUserMessageShown` 清除
+  - OFFLINE → `isOffline == true`；`lastUpdated` 取自 status.lastSuccessAt[ARTICLES]
+  - `onToggleBookmark` → FakeBookmarkRepository 被更新
 
 **`feature:detail`**
 - `ArticleDetailViewModelTest`：以 `SavedStateHandle(mapOf("articleId" to 1L))` 載入 → Content；repository 回 null → NotFound；toggle 收藏；OFFLINE → `isOffline == true`；收藏後 localImagePath 優先
@@ -927,18 +994,19 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 | 3 | `feat(domain): add domain models, freshness policy and refresh triggers` | `core:domain` 全部（§7.1）：model、AppClock、NetworkMonitor、TtlConfig、FreshnessPolicy、RefreshTrigger/Decision、SourceResult/RefreshReport/RefreshStatus、repository interfaces、FeedRefresher、`refreshTriggers()`、`SingleFlight`、`suspendRunCatching`；`core:testing`：FakeClock、FakeNetworkMonitor、MainDispatcherRule、TestData | FreshnessPolicyTest、WeatherConditionTest、SingleFlightTest、SuspendRunCatchingTest、RefreshTriggersTest | `./gradlew :core:domain:test` + 全域驗收 |
 | 4 | `feat(data): add retrofit clients and dtos for spaceflight, open-meteo and dummyjson` | `core:data` network 套件：3 個 Api、DTO、RemoteDataSource interfaces + Retrofit 實作、`NetworkModule`（Json、OkHttp+Cache、3×Retrofit）、`ErrorMappers`；fixtures（由 §6 curl 取得並存檔） | SpaceflightApiTest、OpenMeteoApiTest、DummyJsonApiTest、ErrorMappersTest | `./gradlew :core:data:testDebugUnitTest` |
 | 5 | `feat(data): add room database for feed cache, bookmarks and sync metadata` | entities、DAOs、`LineFeedDatabase`、`DatabaseModule`、room gradle plugin schema 匯出（commit `core/data/schemas/.../1.json`）、DTO→Entity→Domain mappers | FeedArticleDaoTest、BookmarkDaoTest、ArticleMappersTest、WeatherMappersTest、ServiceCardMappersTest | 同上 |
-| 6 | `feat(data): implement offline-first repositories with keyset pagination` | `OfflineFirstArticleRepository`（refresh 重疊合併/替換、trim、loadNextPage keyset + 去重 + single-flight）、`OfflineFirstWeatherRepository`、`OfflineFirstServiceCardRepository`、`DefaultBookmarkRepository`（先不含圖片下載）、`SystemAppClock`、`DataModule` 部分綁定 | OfflineFirstArticleRepositoryTest、OfflineFirstWeatherRepositoryTest、OfflineFirstServiceCardRepositoryTest、DefaultBookmarkRepositoryTest（快照部分） | 同上 |
-| 7 | `feat(data): add freshness-aware refresh coordinator and network monitor` | `DefaultFeedRefresher`（policy + single-flight + status）、`ConnectivityNetworkMonitor`、`CoroutinesModule`、`DataModule` 完成（`@IntoSet SourceRefresher`、`@Provides FreshnessPolicy`）；`app`：`AppRefreshInitializer` + `ProcessLifecycleOwner` 接線、Manifest 權限 | DefaultFeedRefresherTest | 全域驗收 + 安裝到模擬器看 Logcat 有刷新紀錄（可選） |
+| 6 | `feat(data): add paging 3 remote mediator with keyset append for articles` | **（含 Step 3–5 的調整，若 Step 3/5 尚未 commit 則直接依新版 §6/§7 實作，下列「調整」即為 no-op）**：① catalog 加 `paging`、`paging-common`、`paging-compose`、`paging-testing`、`room-paging`；`core:domain` 以 `api` 加 `paging-common`；② domain：`ArticleRepository` 改為 `feedPagingData(): Flow<PagingData<FeedArticle>>` + `observeArticle(id)`，新增 `FeedArticle`，刪除 `LoadMoreResult`/`observeFeed`/`loadNextPage`，`RefreshStatus` 加 `articleRefreshRequestId`；`FakeArticleRepository`、`TestData` 同步更新；③ DB：`feed_articles` 加 `sortIndex` + unique index，新增 `remote_keys` 表與 `RemoteKeyDao`，`FeedArticleDao` 改為 `pagingSource()`（LEFT JOIN bookmarks）/`insertAll(IGNORE)`/`maxSortIndex`/`clearAll`，刪除 `observeAll`/`oldestPublishedAt`/`trimTo`；DB 仍為 version 1（尚未發佈，直接重新產生 `schemas/.../1.json`，不寫 migration）；mapper 改為 `toEntity(sortIndex, fetchedAt)`；④ 新增 `ArticleRemoteMediator`（initialize 用 FreshnessPolicy、REFRESH 清空重建、APPEND keyset + 去重）、`OfflineFirstArticleRepository`（Pager）、`SystemAppClock` 與相關 Hilt 綁定 | 更新 FeedArticleDaoTest（TestPager）、新增 RemoteKeyDaoTest、ArticleRemoteMediatorTest、OfflineFirstArticleRepositoryTest（asSnapshot）；更新 ArticleMappersTest；刪除 v1 的 trim/oldestPublishedAt 測試 | `./gradlew :core:domain:test :core:data:testDebugUnitTest` + 全域驗收 |
+| 7 | `feat(data): add weather, service and bookmark repositories with refresh coordinator` | `OfflineFirstWeatherRepository`、`OfflineFirstServiceCardRepository`（兩者實作 `SourceRefresher`）、`DefaultBookmarkRepository`（先不含圖片下載）；`DefaultFeedRefresher`（policy + single-flight + status；文章只發 `articleRefreshRequestId`）、`ConnectivityNetworkMonitor`、`CoroutinesModule`、`DataModule` 完成（`@IntoSet SourceRefresher` 僅 WEATHER/SERVICES、`@Provides FreshnessPolicy`）；`app`：`AppRefreshInitializer` + `ProcessLifecycleOwner` 接線、Manifest 權限 | OfflineFirstWeatherRepositoryTest、OfflineFirstServiceCardRepositoryTest、DefaultBookmarkRepositoryTest（快照部分）、DefaultFeedRefresherTest | 全域驗收 + 安裝到模擬器看 Logcat 有刷新紀錄（可選） |
 | 8 | `feat(designsystem): add material 3 theme with dark mode and shared state components` | `LineFeedTheme` light/dark、Typography、FullScreenMessage、OfflineBanner、BookmarkIconButton、FeedImage、SourceChip、SkeletonCard、`RelativeTimeFormatter`、`WeatherConditionUi`；每個元件附 `@Preview`（light + dark） | RelativeTimeFormatterTest | 全域驗收 |
-| 9 | `feat(feed): add heterogeneous feed with weather hero, service cards and pagination` | `feature:feed` 全部（§7.5）；`app` 加 Coil `SingletonImageLoader.Factory`、NavHost（先只有 Feed）、底部導覽骨架 | FeedAssemblerTest、DeriveFullScreenStateTest、FeedViewModelTest | 全域驗收 + 模擬器手動：冷啟動、下拉、捲到底、飛航模式 |
+| 9 | `feat(feed): add paged heterogeneous feed with weather hero and service card separators` | `feature:feed` 全部（§7.5）：`FeedViewModel`（`feedItems` 兩段 `cachedIn`、`uiState`）、`ServiceCardSlots`、`toFeedItems()`（map + insertSeparators）、`deriveFeedScreenState()`、`FeedScreen`（`collectAsLazyPagingItems`、天氣 `item {}` + `items(lazyPagingItems)` + footer、`PullToRefreshBox`、`pendingArticleRefreshId` → `refresh()`）、cells；`app` 加 Coil `SingletonImageLoader.Factory`、NavHost（先只有 Feed）、底部導覽骨架 | ServiceCardSlotsTest、FeedPagingTransformsTest、DeriveFeedScreenStateTest、FeedViewModelTest | 全域驗收 + 模擬器手動：冷啟動（fresh → 不打文章 API、stale → 打）、下拉、捲到底自動 append、飛航模式（整頁 Offline / footer Offline） |
 | 10 | `feat(detail): add article detail screen with bookmark toggle` | `feature:detail`；Feed → Detail 導覽；`BookmarkRepository.observeSavedArticle(id)` | ArticleDetailViewModelTest | 同上 + 手動：收藏後飛航模式開詳情 |
 | 11 | `feat(saved): add saved articles screen with offline banner` | `feature:saved`（先不含搜尋）；底部導覽 Reading/Saved 完成；Saved → Detail | SavedViewModelTest（不含 query） | 同上 |
 | 12 | `feat(data): persist bookmark images for offline reading` | `ImageDownloader` + `OkHttpImageDownloader`（tmp→rename）、收藏時於 ApplicationScope 下載、取消時刪檔、`retryPendingImageDownloads` 接到 `AppRefreshInitializer`；UI 以 localImagePath 優先 | DefaultBookmarkRepositoryTest 擴充（下載成功/失敗/重試/刪檔） | 同上 + 手動：收藏 → 清除 App cache（設定 → 儲存空間 → 清除快取）→ 飛航模式 → 圖片仍在 |
 | 13 | `feat(saved): add offline search over saved articles` | Saved 頁 top bar 搜尋欄、`onQueryChange` debounce、無結果 Empty 變體；小動畫（`animateItem`、收藏 icon crossfade） | SavedViewModelTest 擴充（debounce/過濾） | 全域驗收 |
-| 14 | `docs: add readme, decisions log and ai usage notes` | `README.md`（一行執行指令、總覽、截圖可選、**新鮮度策略**（§3 全文精簡版 + 數據表）、**Plan & Sequencing**（§1、§10 的理由）、AI 流程圖（mermaid：Wayne 定約束 → Opus 規劃 PLAN.md → Sonnet 逐步實作 + 測試 → Wayne 審查/修正/提交）、已知限制、若有更多時間）、`DECISIONS.md`（§2 全部，格式：選擇/替代/取捨）、`AI_USAGE.md` 草稿（見下） | — | 文件中所有指令實際可執行 |
+| 14 | `docs: add readme, decisions log and ai usage notes` | `README.md`（一行執行指令、總覽、截圖可選、**新鮮度策略**（§3 全文精簡版 + 數據表）、**Plan & Sequencing**（§1、§10 的理由）、AI 流程圖（mermaid：Wayne 定約束 → Opus 規劃 PLAN.md → Sonnet 逐步實作 + 測試 → Wayne 審查/修正/提交）、已知限制、若有更多時間）、`DECISIONS.md`（§2 全部，格式：選擇/替代/取捨；**§2.8 的 v1→v2 決策變更紀錄必須完整保留**）、`AI_USAGE.md` 草稿（見下） | — | 文件中所有指令實際可執行 |
 
 **AI_USAGE.md 注意**：必須誠實，**由 Wayne 最後審閱改寫**。Sonnet 只能草擬「確實發生過」的事，可用素材：
 - 流程：Opus 做規劃（本文件）、Sonnet 實作與寫測試、Wayne 審查每個 commit。
+- 「拒絕/改寫 AI 建議」的真實案例（v2）：Opus 的 v1 計畫選擇手寫分頁，Wayne 審閱 §2.8 後逐點反駁並改為 Paging 3（見 §2.8 決策變更紀錄）。
 - 「AI 弄錯被抓到」的真實案例：先前由 Haiku 整理的需求版本出現幻覺（OpenWeather、`ASSESSMENT.md`、「禁止 AI 生成架構」等原文沒有的內容），由人工對照 PDF 原文發現並重寫（見 `requirements.md` 開頭註記）。
 - 實作過程中實際遇到的錯誤（例如版本相容、測試失敗）請在 `docs/NOTES.md` 隨手記錄，最後挑 2–3 個寫入。
 - 不得捏造 prompt 或事件。
@@ -958,7 +1026,15 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 | **`jvmToolchain(17)` 觸發下載 JDK** | 不用 toolchain，改設 source/target compatibility 與 `jvmTarget` |
 | **minSdk 24 用 `java.time`** | 所有 Android module 開 core library desugaring（convention plugin 統一處理） |
 | **Spaceflight：未來時間、同秒多篇、summary 很短** | §6.1 已列對策；有對應測試 |
-| **Offset 分頁重複/漏資料** | 改用 keyset（`published_at_lte`）+ id 去重 + 無進度即結束 |
+| **Offset 分頁重複/漏資料** | APPEND 用 keyset（`published_at_lte`，游標存 `remote_keys`）+ `existingIds` 去重 + 無新 id 即結束 |
+| **Paging + Room 交易一致性** | 網路請求在 transaction **外**；成功後才 `db.withTransaction { clearAll/insert/remoteKey/markSuccess }`，四者同一個 transaction，避免「資料已清空但 remote key 還是舊的」或「時間戳新但資料舊」；Room PagingSource 在 transaction 提交後才 invalidate 一次 |
+| **REFRESH 時 sortIndex 重算** | REFRESH 一律 `clearAll` 後從 0 重排（不做合併，避免負數/斷號）；APPEND 的 `maxSortIndex()` 在同一 transaction 內讀取；`sortIndex` 有 unique index，若寫出重複會立即在測試中失敗 |
+| **REFRESH 與 APPEND 競態** | Paging 會讓 REFRESH 優先並取消/延後進行中的 APPEND；另外 APPEND 若在 REFRESH 清空後才寫入，因游標讀自 `remote_keys`（已被 REFRESH 更新）也不會寫入舊資料。ArticleRemoteMediatorTest 覆蓋「REFRESH 後的 APPEND 使用新游標」 |
+| **空 DB + `SKIP_INITIAL_REFRESH`（例如離線冷啟動）** | Paging 會對空的 PagingSource 觸發 mediator APPEND；remote key 不存在時回 `Success(endOfPaginationReached = false)` 且不打網路；網路恢復 → 協調器發出文章刷新請求 → `refresh()` |
+| **`cachedIn` 與 `combine`** | `pager.flow` 必須先 `cachedIn(viewModelScope)` 再與服務卡 flow `combine`，否則同一個 PagingData 被收集兩次會拋 `IllegalStateException`；combine 後再 `cachedIn` 一次避免 config change 重算轉換。`FeedViewModelTest` 以 `asSnapshot()` 覆蓋 |
+| **LazyColumn key 與 separator 唯一性** | 文章 key `article-{id}`（id 為 PK，APPEND 去重保證不重複）；服務卡 key `service-{slot}`（slot 由唯一的 sortIndex 推得）；天氣 `weather`、footer `footer` 為固定 key；`FeedPagingTransformsTest` 斷言 key 唯一。**不要**用 `services[i].id` 當 key（服務卡會循環重複） |
+| **`initialize()` 只在 Pager 建立時呼叫一次** | 回前景的文章刷新不能靠它；由協調器的 `articleRefreshRequestId` + 畫面 `refresh()` 處理（§3.3） |
+| **收藏變動使 PagingSource invalidate** | JOIN bookmarks 的代價是每次收藏都重載目前頁面（~20 筆，DB 內，成本低）；LazyColumn 以 key 保持位置 |
 | **API 不穩 / 掛掉** | App 以快取優先，失敗只顯示 snackbar/錯誤頁；測試全部用 fixture 不打網路；README 註明若 API 掛掉，已快取與已收藏內容仍可用。（不做本地 mock flavor——需求允許 mock，但會增加 build variant 複雜度；列為備案：若 Spaceflight 長時間不可用，再加 `assets/` fixture 的 `FakeRemoteDataSource` 綁定） |
 | **DummyJSON rate limit（100）** | 24h TTL + 單一請求，實際不會觸發 |
 | **`runCatching` 吞掉 `CancellationException`** | 一律用 `suspendRunCatching` |
@@ -968,8 +1044,7 @@ Android module 的單元測試 task 是 `testDebugUnitTest`，JVM module 是 `te
 | **Edge-to-edge（targetSdk 35+ 強制）** | `enableEdgeToEdge()` + Scaffold `innerPadding`；列表底部加 navigation bar insets |
 | **Configuration cache 與 plugin 不相容** | 發生時關閉並記錄 |
 | **`material-icons-extended` 很大** | debug APK 變大可接受（release 由 R8 移除未用 icon）；README 註記 |
-| **LazyColumn key 重複會 crash** | 服務卡 key 含 slot；文章 key 用 id；FeedAssemblerTest 斷言 key 唯一 |
-| **刷新時列表跳動** | LazyColumn 以 key 維持錨點；文章 refresh 採合併而非替換 |
+| **刷新時列表跳動** | REFRESH 會清空重建：背景請求只在 Feed 可見時執行並捲回頂端（刻意的「回來看最新」行為）；使用者下拉本就預期回到頂端。「N 則新文章」pill 列為延後 |
 | **收藏圖片佔空間** | 每張約 100 KB，取消收藏即刪；README 已知限制 |
 | **不要冒用品牌** | App 名稱 "LineFeed"、package `com.waynejiang.linefeed`；不使用 LINE 官方 logo 或商標素材，只用綠色系配色 |
 
