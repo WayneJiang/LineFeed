@@ -2,6 +2,8 @@ package com.waynejiang.linefeed.core.data.di
 
 import com.waynejiang.linefeed.core.data.network.ArticleRemoteDataSource
 import com.waynejiang.linefeed.core.data.network.ConnectivityNetworkMonitor
+import com.waynejiang.linefeed.core.data.network.ImageDownloader
+import com.waynejiang.linefeed.core.data.network.OkHttpImageDownloader
 import com.waynejiang.linefeed.core.data.network.RetrofitArticleRemoteDataSource
 import com.waynejiang.linefeed.core.data.network.RetrofitServiceRemoteDataSource
 import com.waynejiang.linefeed.core.data.network.RetrofitWeatherRemoteDataSource
@@ -68,6 +70,9 @@ internal abstract class DataModule {
 
     @Binds
     abstract fun bindServiceRemoteDataSource(impl: RetrofitServiceRemoteDataSource): ServiceRemoteDataSource
+
+    @Binds
+    abstract fun bindImageDownloader(impl: OkHttpImageDownloader): ImageDownloader
 
     // Only WEATHER and SERVICES: articles are refreshed exclusively by ArticleRemoteMediator (see
     // SourceRefresher's KDoc and PLAN.md §7.2).

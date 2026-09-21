@@ -373,3 +373,34 @@
 
 - **測試涵蓋**：`SavedViewModelTest`（loading→就緒轉換、空清單、清單反映 repository 內容、
   isOffline 跟隨 NetworkMonitor、移除收藏後清單即時更新）。
+
+## Step 12：persist bookmark images for offline reading
+
+- **`ImageDownloader`/`OkHttpImageDownloader`**（`core:data/network`）：下載到
+  `<destination>.tmp`，整個 body 讀完才 `renameTo(destination)`，讀者永遠不會看到寫一半的檔案；
+  process 死在下載中間只會留下孤兒 `.tmp`，不會壞掉「正式」檔案。
+- **`DefaultBookmarkRepository`** 收藏時在 `@ApplicationScope` 啟動下載（不擋 `setBookmarked`
+  呼叫端）；用 `ConcurrentHashMap<Long, Job>` 追蹤每篇文章目前的下載工作——取消收藏時先
+  `cancel()` 對應的 Job 再刪 DB 列與本機檔案，避免「已經取消收藏，但背景下載晚一步完成又把
+  `localImagePath` 寫回去」的競態；下載完成後也會重新查一次 `bookmarkDao.findById`，
+  確認還在收藏清單裡才寫 `localImagePath`（雙重保險）。`retryPendingImageDownloads()` 真正實作：
+  掃 `bookmarkDao.pendingImageDownloads()`（`localImagePath IS NULL AND imageUrl IS NOT NULL`）
+  逐筆重試，接到 `AppRefreshInitializer`，在 `FOREGROUND`/`NETWORK_RESTORED` 觸發時呼叫。
+- **`BookmarkDao` 新增 `findById`**（suspend，非 Flow）：取消收藏前要知道舊
+  `localImagePath` 才能刪檔，`observeById` 是 Flow 不適合這種一次性讀取。
+- **UI**：Step 10（Detail）與 Step 11（Saved）在寫的當下就已經預留
+  `state.localImagePath?.let(::File) ?: article.imageUrl` 這個「本機優先」的邏輯，本步驟不用
+  再改 UI。
+- **測試涵蓋**：`DefaultBookmarkRepositoryTest` 新增：下載成功寫入真實檔案並可讀、下載失敗
+  `localImagePath` 維持 null、沒有 `imageUrl` 的文章完全不觸發下載、取消收藏會刪除已下載的
+  檔案、**取消收藏發生在下載仍在進行中時會取消該下載而不是與它賽跑**（用可控制的
+  `CompletableDeferred` gate 模擬下載卡住的情境）、`retryPendingImageDownloads` 只對「缺本機
+  圖片」的收藏重試、若全部都已有本機圖片則完全不會再打網路。
+- **模擬器手動驗證（依 PLAN.md §10 Step 12 的驗收項目，做了簡化版）**：`Pixel_10_Pro_XL` 上
+  收藏一篇文章 → `adb shell svc wifi disable && adb shell svc data disable`（比手動切飛航模式
+  更可靠，模擬器的飛航模式 UI toggle 在此 Android 版本上不會真的斷網）→ 強制關閉並重開 App
+  → **Saved 頁與 Reading 頁在完全離線情況下都正確顯示 offline banner，且已收藏文章的縮圖/大圖
+  仍從本機檔案正確載入**（截圖存在 scratchpad，未提交）。沒有另外做「清除 App 儲存空間快取」
+  這個子步驟（等同於清掉 OkHttp 磁碟快取但保留 app 私有檔案），因為 `bookmark_images` 本來就
+  存在 `filesDir`（不是 `cacheDir`），架構上不會被「清除快取」動作影響，用停用網路已經足以
+  驗證「不靠網路、不靠 HTTP 快取，純粹讀本機檔案」這件事。

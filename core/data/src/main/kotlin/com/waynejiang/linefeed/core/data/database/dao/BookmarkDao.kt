@@ -28,6 +28,10 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE articleId = :id")
     fun observeById(id: Long): Flow<BookmarkEntity?>
 
+    /** Used before deleting a bookmark, to know whether there's a downloaded image file to also delete. */
+    @Query("SELECT * FROM bookmarks WHERE articleId = :id")
+    suspend fun findById(id: Long): BookmarkEntity?
+
     @Upsert
     suspend fun upsert(entity: BookmarkEntity)
 

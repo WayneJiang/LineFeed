@@ -4,9 +4,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.waynejiang.linefeed.core.data.di.ApplicationScope
+import com.waynejiang.linefeed.core.domain.freshness.RefreshTrigger
 import com.waynejiang.linefeed.core.domain.network.NetworkMonitor
 import com.waynejiang.linefeed.core.domain.refresh.FeedRefresher
 import com.waynejiang.linefeed.core.domain.refresh.refreshTriggers
+import com.waynejiang.linefeed.core.domain.repository.BookmarkRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -28,11 +30,19 @@ import kotlinx.coroutines.withContext
 class AppRefreshInitializer @Inject constructor(
     private val feedRefresher: FeedRefresher,
     private val networkMonitor: NetworkMonitor,
+    private val bookmarkRepository: BookmarkRepository,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
         refreshTriggers(isForeground = processForegroundFlow(), network = networkMonitor.status)
-            .onEach { trigger -> feedRefresher.refresh(trigger) }
+            .onEach { trigger ->
+                feedRefresher.refresh(trigger)
+                // A connection coming back, or the app returning to the foreground, is also the
+                // moment any bookmark images that failed to download earlier are worth retrying.
+                if (trigger == RefreshTrigger.FOREGROUND || trigger == RefreshTrigger.NETWORK_RESTORED) {
+                    bookmarkRepository.retryPendingImageDownloads()
+                }
+            }
             .launchIn(scope)
     }
 
