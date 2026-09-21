@@ -233,3 +233,24 @@
 - 尚未做（依計畫排到後續步驟）：`feature:feed` 尚未存在，`AppRefreshInitializer.start()` 目前沒有
   被任何畫面/測試驗證實際的 Logcat 行為，只驗證了 Hilt 圖可解析與 `app:assembleDebug` 成功；
   手動的模擬器驗證留到 Step 9（`feature:feed` 完成後）一起做。
+
+## Step 8：add material 3 theme with dark mode and shared state components
+
+- **問題**：`FeedImage` 原本用 `val state by painter.state` 讀 Coil3 `AsyncImagePainter` 的狀態，
+  編譯報 `DELEGATE_SPECIAL_FUNCTION_NONE_APPLICABLE`（列出 `State<T>.getValue` 等候選但都不適用）。
+  **原因**：命名沖突——委託目標型別 `AsyncImagePainter.State` 與 Compose 的
+  `androidx.compose.runtime.State` 撞名，`by` 委託解析在這個情境下找不到正確的
+  `getValue` 多載。
+  **解法**：不用屬性委託，直接寫 `val state: AsyncImagePainter.State = painter.state.value`——
+  在 Compose 中讀取 `State<T>.value` 一樣會註冊快照讀取、觸發重組，行為與 `by` 委託等價。
+- **設計**：色票手刻（非套用 Material Theme Builder 產生的完整 tonal palette），刻意選一個
+  與 LINE 官方品牌綠（`#06C755`）明顯不同的深綠（`Green40 = #13712E`），避免「顏色本身」被誤認
+  為冒用品牌；不使用 dynamic color（PLAN.md §0 明訂）。
+  `RelativeTimeFormatter` 固定用 `Locale.US` 格式化絕對日期（"Sep 18"），不是跟隨裝置語系——
+  這是為了讓 PLAN.md §7.3 給的確切格式範例可被單元測試斷言，International 化留在 README
+  已知限制。
+- **測試**：`RelativeTimeFormatterTest` 覆蓋 <1 分鐘/分鐘/小時/天/滿 7 天轉絕對日期、未來時間
+  （clock skew）也轉絕對日期而不是負數、1 分鐘的邊界值。
+- 尚未做：`SkeletonCard` 的 shimmer 目前是簡單的 alpha 呼吸動畫，不是掃光效果；`FeedImage`
+  的 placeholder/error 圖示相同（Icons.Filled.Image），detail 頁大圖版面留給 Step 10 依實際
+  使用情境調整（可能需要不同 aspect ratio）。

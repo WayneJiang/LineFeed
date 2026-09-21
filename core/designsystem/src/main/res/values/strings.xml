@@ -1,0 +1,17 @@
+<resources>
+    <string name="designsystem_bookmark_add">Save article</string>
+    <string name="designsystem_bookmark_remove">Remove from saved</string>
+    <string name="designsystem_offline_banner">You\'re offline — showing saved content</string>
+    <string name="designsystem_feed_image_content_description">Article image</string>
+
+    <string name="designsystem_weather_clear">Clear</string>
+    <string name="designsystem_weather_partly_cloudy">Partly cloudy</string>
+    <string name="designsystem_weather_cloudy">Cloudy</string>
+    <string name="designsystem_weather_fog">Fog</string>
+    <string name="designsystem_weather_drizzle">Drizzle</string>
+    <string name="designsystem_weather_rain">Rain</string>
+    <string name="designsystem_weather_snow">Snow</string>
+    <string name="designsystem_weather_showers">Showers</string>
+    <string name="designsystem_weather_thunderstorm">Thunderstorm</string>
+    <string name="designsystem_weather_unknown">Unknown</string>
+</resources>
