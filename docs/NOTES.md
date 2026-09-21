@@ -48,6 +48,42 @@
    同時把先前誤建的 `core/data/src/test`、`core/domain/src/test` 空目錄整個刪除，
    遵守 PLAN §12「不要建立空的 src/test」。
 
+## Step 3：add domain models, freshness policy and refresh triggers
+
+- **計畫變更**：實作到一半時，PLAN.md 被 Wayne/Opus 修訂為 v2（`docs/PLAN.md` commit
+  `b4a338e docs: revise plan to use paging 3 with remote mediator`）：分頁從手寫
+  keyset 改為 Paging 3 + `RemoteMediator`。coordinator 指示 Step 3（本步）直接依
+  v2 的 §6/§7 實作，不必先做 v1 版再改。因此本步 `core:domain`／`core:testing`
+  與 v1 的差異：新增 `FeedArticle` model、`ArticleRepository` 改為
+  `feedPagingData(): Flow<PagingData<FeedArticle>>` + `observeArticle(id)`（移除
+  `observeFeed()`/`loadNextPage()`/`LoadMoreResult`）、`RefreshStatus` 新增
+  `articleRefreshRequestId`、`core:domain` 以 `api` 依賴 `androidx.paging:paging-common`
+  （KMP artifact，有 JVM target，純 JVM module 可用）。這些改動只影響尚未 commit
+  的工作，未曾以 v1 形式進版控。
+
+- **問題**：`FreshnessPolicyTest` 一開始想直接重用 `core:testing` 的 `FakeClock`。
+  **原因**：module 依賴方向是 `core:testing --api--> core:domain`；若
+  `core:domain` 的 `test` source set 又 `testImplementation(project(":core:testing"))`，
+  會形成 `core:domain -> core:testing -> core:domain` 的專案依賴環。
+  **解法**：`core:domain` 的測試改成在測試檔內自帶一個極簡的 `FixedClock`
+  （`private class FixedClock(private val instant: Instant) : AppClock`），不依賴
+  `core:testing`。`core:testing` 的 fake 只給「依賴 `core:domain` 的其他 module」
+  （`core:data`、`feature:*`）在測試裡用，`core:domain` 自己的測試不需要、也不能用它。
+
+- **問題**：`SingleFlightTest` 的「取消其中一個呼叫者，共享工作不受影響」測試第一次
+  跑會斷言失敗（`expected:<42> but was:<-1>`），也就是「存活的呼叫者」自己重新執行
+  了 block，而不是拿到被取消那個呼叫者共享的結果。
+  **原因**：`runTest` 預設用 `StandardTestDispatcher`，`async { }` 建立的協程不會
+  立即開始執行（要等排程器有機會跑）。測試在建立兩個 `async` 之後立刻呼叫
+  `cancelled.cancel()`，這時 `cancelled` 協程可能根本還沒開始執行、根本沒有機會
+  搶到 `SingleFlight` 的「這個 key 由我負責跑」名額，於是變成 `survivor` 自己去跑
+  （呼叫自己的 block 回傳 `-1`），而不是共用 `cancelled` 應該要建立的共享工作。
+  **解法**：在 `cancelled.cancel()` 之前呼叫 `testScheduler.advanceUntilIdle()`，
+  讓兩個協程先跑到各自的第一個暫停點（也就是都已經呼叫過
+  `SingleFlight.run()`、其中一個已經真的登記為「負責執行者」並在
+  `deferred.await()` 上暫停），再取消其中一個，這樣才真正測到「取消呼叫端不影響
+  共享工作」這件事，而不是「取消得夠早，工作根本沒開始」的假陽性。
+
 ## 一般記錄
 - 本機環境確認：JDK 21 (Corretto)、Android SDK 已有 platforms 35/36/37.0、
   `~/.gradle/wrapper/dists` 已有 gradle-9.7.1-bin 快取、AGP 9.4.0 jar 已在
