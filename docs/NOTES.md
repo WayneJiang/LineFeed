@@ -84,6 +84,39 @@
   `deferred.await()` 上暫停），再取消其中一個，這樣才真正測到「取消呼叫端不影響
   共享工作」這件事，而不是「取消得夠早，工作根本沒開始」的假陽性。
 
+## Step 4：add retrofit clients and dtos for spaceflight, open-meteo and dummyjson
+
+- **問題**：`NetworkModule.kt` 一開始照 PLAN.md 上寫的
+  `import retrofit2.kotlinx.serialization.asConverterFactory` 寫，編譯出現
+  `Unresolved reference 'kotlinx'`。
+  **原因**：`converter-kotlinx-serialization:3.0.0` 這個 artifact 的實際 package
+  是 `retrofit2.converter.kotlinx.serialization`（多了一層 `converter`），不是
+  PLAN.md 寫的 `retrofit2.kotlinx.serialization`；用 `javap` 反編譯該 jar
+  （`retrofit2/converter/kotlinx/serialization/*.class`）確認。擴充函式本身叫
+  `asConverterFactory`（定義在 `Factory.kt`，`@file:JvmName("KotlinSerializationConverterFactory")`
+  只是給 Java 呼叫端看的 JVM 名稱，Kotlin 這邊呼叫的是原本的擴充函式名）。
+  **解法**：改成
+  `import retrofit2.converter.kotlinx.serialization.asConverterFactory`，其餘
+  `json.asConverterFactory(mediaType)` 呼叫方式不變。已在本 commit 內驗證
+  `:core:data:compileDebugKotlin` 成功。
+
+- **問題**：`mockwebserver3` 的 `MockWebServer` 沒有 `shutdown()` 方法。
+  **原因**：OkHttp 5 的 `mockwebserver3` 套件把 `MockWebServer` 改成實作
+  `java.io.Closeable`，關閉伺服器的方法是 `close()`，不是舊版 mockwebserver（`okhttp3.mockwebserver`）
+  的 `shutdown()`。
+  **解法**：測試輔助類別 `MockApiTestHarness.shutdown()` 內部呼叫
+  `server.close()`。
+
+- **測試資料誠實聲明**：`core/data/src/test/resources/fixtures/` 下
+  `spaceflight_articles_page1.json`、`open_meteo_forecast.json`、
+  `dummyjson_products.json` 是本步驟當下用 `curl` 對三個真實 API 現抓的回應（見
+  PLAN.md §6 記載的路徑與參數）；`spaceflight_articles_edge_cases.json`、
+  `dummyjson_products_missing_brand.json` 是**手寫**的最小 JSON，用來涵蓋
+  PLAN.md §6.1/§6.3 提到但這次真實抓取沒剛好抓到的邊界情況（`image_url` 為
+  `null`/空字串、`summary` 為空字串、`updated_at` 缺失、未知欄位、`brand`
+  缺失）——欄位名稱與型態都對照真實 schema 手刻，但内容本身是捏造的測試資料，
+  誠實記錄於此，不混充為真實抓取結果。
+
 ## 一般記錄
 - 本機環境確認：JDK 21 (Corretto)、Android SDK 已有 platforms 35/36/37.0、
   `~/.gradle/wrapper/dists` 已有 gradle-9.7.1-bin 快取、AGP 9.4.0 jar 已在

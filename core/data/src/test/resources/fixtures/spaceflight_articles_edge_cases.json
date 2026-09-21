@@ -1,0 +1,34 @@
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 99001,
+      "title": "Article with no image and empty summary",
+      "authors": [{ "name": "Jane Doe", "socials": null }],
+      "url": "https://example.com/articles/99001",
+      "image_url": null,
+      "news_site": "Example News",
+      "summary": "",
+      "published_at": "2026-09-21T14:00:00Z",
+      "updated_at": "2026-09-18T23:10:20.648543Z",
+      "featured": false,
+      "launches": [],
+      "events": [],
+      "some_unknown_future_field": { "nested": true }
+    },
+    {
+      "id": 99002,
+      "title": "Second article at the same published_at as another",
+      "authors": [],
+      "url": "https://example.com/articles/99002",
+      "image_url": "",
+      "news_site": "Example News",
+      "summary": "Short.",
+      "published_at": "2026-09-21T14:00:00Z",
+      "updated_at": null,
+      "featured": true
+    }
+  ]
+}

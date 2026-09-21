@@ -1,0 +1,17 @@
+{
+  "products": [
+    {
+      "id": 501,
+      "title": "Generic Product Without a Brand",
+      "description": "A product deliberately missing the optional brand field.",
+      "price": 4.99,
+      "discountPercentage": 0.0,
+      "rating": 3.2,
+      "thumbnail": "https://cdn.dummyjson.com/product-images/generic/501/thumbnail.webp",
+      "category": "misc"
+    }
+  ],
+  "total": 1,
+  "skip": 0,
+  "limit": 10
+}

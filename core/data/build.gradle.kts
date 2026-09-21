@@ -7,6 +7,10 @@ plugins {
 
 android {
     namespace = "com.waynejiang.linefeed.core.data"
+
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 room {
