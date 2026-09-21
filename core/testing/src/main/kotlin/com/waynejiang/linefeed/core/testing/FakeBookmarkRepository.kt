@@ -23,7 +23,14 @@ class FakeBookmarkRepository(initial: List<SavedArticle> = emptyList()) : Bookma
         }
     }
 
+    /** Direct control over the underlying snapshot(s) for tests that need fields `setBookmarked` doesn't set, e.g. `localImagePath`. */
+    fun setSaved(list: List<SavedArticle>) {
+        saved.value = list
+    }
+
     override fun observeBookmarkedIds(): Flow<Set<Long>> = saved.map { list -> list.map { it.article.id }.toSet() }
+
+    override fun observeSavedArticle(id: Long): Flow<SavedArticle?> = saved.map { list -> list.firstOrNull { it.article.id == id } }
 
     override suspend fun setBookmarked(article: Article, bookmarked: Boolean) {
         saved.value = if (bookmarked) {

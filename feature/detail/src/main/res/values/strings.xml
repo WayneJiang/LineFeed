@@ -1,0 +1,8 @@
+<resources>
+    <string name="detail_not_found_title">Article not found</string>
+    <string name="detail_not_found_body">This article isn\'t in your cache or saved items anymore.</string>
+    <string name="detail_back_content_description">Back</string>
+    <string name="detail_read_original">Read original</string>
+    <string name="detail_read_original_offline">Read original (needs a connection)</string>
+    <string name="detail_by_authors">By %1$s</string>
+</resources>

@@ -302,3 +302,27 @@
   `AppError.UNKNOWN`（不是 `SERVER`）。已在程式碼註解與 README「已知限制」處記錄。
 - **手動驗證**：本步驟的模擬器驗證（冷啟動 fresh/stale、下拉、捲到底、飛航模式）併入 Step 11
   完成後一起做（見該步筆記）。
+
+## Step 10：add article detail screen with bookmark toggle
+
+- **偏離 PLAN.md**：`BookmarkRepository` 新增 `observeSavedArticle(id): Flow<SavedArticle?>`
+  （PLAN.md §7.6 原文列了兩個選項，「建議在 BookmarkRepository 加 observeSavedArticle(id)」——
+  採用建議選項，不是無中生有的偏離，這裡記錄是因為它跟 Step 9 的
+  `ArticleRepository.observeLastSuccessAt()` 一樣，都是「PLAN 列出兩個做法時選一個」的決策點）。
+  `DetailUiState.Content` 也比 PLAN.md §5.5 原始定義多一個 `localImagePath: String?` 欄位——
+  詳情頁離線時要顯示收藏文章「已下載到本機」的圖片（PLAN.md §4.1/§7.6 都提到這個需求），
+  但 `Article` 本身故意不帶 `localImagePath`（避免它滲進不需要離線圖片的地方，例如 Feed 列表），
+  所以只能讓 `DetailUiState.Content` 自己多帶一個欄位。
+- **`SavedStateHandle` 用法**：依 PLAN.md §11 風險清單「`SavedStateHandle.toRoute()` 在 JVM 測試
+  失敗」，`ArticleDetailViewModel` 用 `savedStateHandle.get<Long>("articleId")`（型別安全導航的
+  參數仍然是用屬性名稱存進 `SavedStateHandle`，用純 key 讀取一樣讀得到，不需要
+  `toRoute()`/Android Bundle）。測試中直接 `SavedStateHandle(mapOf("articleId" to id))` 構造，
+  不需要 Robolectric。
+- **問題**：`feature:detail` 一開始沒加 `material-icons-extended`，`ArticleDetailScreen.kt` 用
+  `Icons.AutoMirrored.Filled.ArrowBack` 編譯報 `Unresolved reference 'icons'`——與 Step 9 遇到的
+  同一類問題（`core:designsystem` 的 `implementation` 依賴不會傳遞給下游），解法相同：
+  在 `feature/detail/build.gradle.kts` 自己加這個依賴。
+- **測試涵蓋**：`ArticleDetailViewModelTest`——不存在時 NotFound、feed 快取有資料時反映
+  isOffline、feed 快取沒有但收藏快照有時 fallback 到快照（含離線後 feed 快取被清空的情境）、
+  `localImagePath` 只從收藏快照來（不是 feed 快取）、只在 feed 快取而未收藏時 `isBookmarked`
+  為 false、收藏/取消收藏的 toggle、內容尚未載入時呼叫 `onToggleBookmark()` 是 no-op。

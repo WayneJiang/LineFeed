@@ -26,6 +26,8 @@ internal class DefaultBookmarkRepository @Inject constructor(
 
     override fun observeBookmarkedIds(): Flow<Set<Long>> = bookmarkDao.observeIds().map { it.toSet() }
 
+    override fun observeSavedArticle(id: Long): Flow<SavedArticle?> = bookmarkDao.observeById(id).map { it?.toDomain() }
+
     override suspend fun setBookmarked(article: Article, bookmarked: Boolean) {
         if (bookmarked) {
             bookmarkDao.upsert(article.toBookmarkEntity(savedAt = clock.now()))

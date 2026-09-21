@@ -23,6 +23,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.waynejiang.linefeed.R
+import com.waynejiang.linefeed.feature.detail.ArticleDetailRoute
+import com.waynejiang.linefeed.feature.detail.articleDetailScreen
 import com.waynejiang.linefeed.feature.feed.FeedRoute
 import com.waynejiang.linefeed.feature.feed.feedScreen
 import kotlinx.serialization.Serializable
@@ -76,7 +78,7 @@ fun LineFeedApp() {
             modifier = Modifier.padding(innerPadding),
         ) {
             feedScreen(
-                onArticleClick = { /* wired once feature:detail exists (step 10) */ },
+                onArticleClick = { articleId -> navController.navigate(ArticleDetailRoute(articleId)) },
                 onOpenSaved = {
                     navController.navigate(SavedPlaceholderRoute) {
                         popUpTo(navController.graph.findStartDestination().id) { saveState = true }
@@ -85,6 +87,7 @@ fun LineFeedApp() {
                     }
                 },
             )
+            articleDetailScreen(onBack = { navController.popBackStack() })
             composable<SavedPlaceholderRoute> {
                 Text(text = stringResource(R.string.app_saved_coming_soon), modifier = Modifier.padding(16.dp))
             }

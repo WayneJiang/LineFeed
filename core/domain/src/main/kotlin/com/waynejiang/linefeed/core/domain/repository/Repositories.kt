@@ -31,6 +31,9 @@ interface ArticleRepository {
 interface BookmarkRepository {
     fun observeSaved(query: String = ""): Flow<List<SavedArticle>>
     fun observeBookmarkedIds(): Flow<Set<Long>>
+
+    /** The detail screen's only way to see [SavedArticle.localImagePath] (a live join would need `feed_articles`, which is disposable). */
+    fun observeSavedArticle(id: Long): Flow<SavedArticle?>
     suspend fun setBookmarked(article: Article, bookmarked: Boolean)
     suspend fun retryPendingImageDownloads()
 }
