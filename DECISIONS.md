@@ -159,18 +159,59 @@
 **替代方案（v1，被推翻）**：
 - 手寫 keyset 分頁：Room `Flow<List<Article>>`、VM 持有 `AppendState` 狀態機、`snapshotFlow` 觸發 `loadNextPage()`、純函式 `FeedAssembler` 組合資料
 
-**為什麼改用 Paging 3？** (面試素材)
+### v1 原始決策：為什麼當初不用 Paging 3（Opus 撰寫）
 
-v1 的理由被驗證為誇大：
+v1 計畫（Opus）的選擇與理由：
 
-| v1 理由 | Paging 3 的回應 |
+**v1 的選擇**：
+- Room 觀察整個快取文章列表 `Flow<List<ArticleEntity>>`（排序 `publishedAt DESC, id DESC`）
+- 下一頁：`loadNextPage()` 以快取中**最舊的 `publishedAt`** 當游標，呼叫 `?published_at_lte=<cursor>&ordering=-published_at&limit=20`，用 id upsert 去重（邊界那幾筆一定會重複回來）
+- 結束條件：回傳筆數 < pageSize，或「這一頁沒有任何新 id」（防止同一秒大量文章造成無限迴圈）
+- ViewModel 持有 `AppendState`（Idle / Loading / Error / EndReached / Offline），UI 透過 `snapshotFlow { lastVisibleIndex }` 在距離底部 5 筆時呼叫 `onNearEnd()`；VM 在 Loading/EndReached 時忽略
+- 異質 feed：純函式 `FeedAssembler.assemble(weather, articles, services): List<FeedItem>`
+
+**為什麼用 keyset 而非 offset**：
+- 文章持續新增，offset 分頁在「讀第 2 頁之前有新文章發布」時會重複或漏掉
+- 已驗證 API 支援 `published_at_lte` / `published_at_lt`
+
+**考慮過的替代方案**：
+- Paging 3 + RemoteMediator + Room PagingSource
+- v1 承認的 Paging 3 優點：記憶體視窗化、placeholder、內建 LoadState、retry
+
+**不採用 Paging 3 的四個理由**：
+
+(1) **異質混排難**：Paging 裡異質混排只能用 `insertSeparators`，而「每 N 篇插一張服務卡」需要位置資訊，`insertSeparators` 只有 before/after 參數，沒有 index，要嘛在 DB 維護 sortIndex、要嘛寫有狀態的 separator，都很彆扭
+
+(2) **與新鮮度協調器重複決策**：`RemoteMediator.initialize()` 與 `REFRESH` 會變成第二個「決定何時刷新」的地方，和我們集中式的新鮮度協調器（§3）重複
+
+(3) **快取規模小效益低**：本 App 快取上限數百筆，Paging 的記憶體視窗化效益低
+
+(4) **手寫版本便於完整測試**：手寫版本讓 feed 組合成為可完整單元測試的純函式，append 狀態機也清楚可測（對應加分項「非同步邏輯測試」）
+
+**代價**：
+- 自己處理觸發時機、去重、重試、結束條件；沒有 placeholder
+- 若 feed 規模變成無限長（例如 VOOM），會改回 Paging 3 並把服務卡改成 DB 內的一種 row type
+
+### 為什麼改用 Paging 3？推翻過程
+
+Wayne 審閱 v1 計畫後在對話中提問：「為什麼不使用page3、Okhttp3+Retrofit？」（其中 OkHttp/Retrofit 部分只是溝通落差：計畫本來就用 Retrofit 3 + OkHttp 5），並追問：「理由1,3,4 改用Paging3會變難作嗎」
+
+主控（Claude Code）據此評估各理由——結論是四個理由都不會讓 Paging 3「做不出來」，只有理由 1 會多一些工作：
+
+| v1 理由 | 改用 Paging 3 的回應 |
 |---|---|
-| 異質混排難（`insertSeparators` 沒 index） | 天氣 hero 不必進 PagingData；服務卡位置由 mediator 寫入時指派 `sortIndex` 決定，規則抽成純函式即可測 |
-| 與新鮮度協調器重複決策 | 讓 `initialize()` 直接呼叫同一個 `FreshnessPolicy`；決策點仍是唯一的 |
-| 快取規模小效益低 | Paging 的價值是內建 LoadState/retry/append 觸發，不是記憶體（省工）|
-| 手寫較好測 | 官方 `paging-testing`（`TestPager`、`asSnapshot()`）足以測 PagingSource；RemoteMediator 用 Robolectric + in-memory Room 直接呼叫 `load()` |
+| (1) 異質混排難 | 天氣 hero 不必進 PagingData（LazyColumn 先放獨立 `item {}`）；服務卡位置由 mediator 寫入時指派遞增 `sortIndex` 決定，規則抽成純函式 `ServiceCardSlots.slotBefore()` 即可單獨測試 |
+| (2) 與協調器重複 | 讓 `initialize()` 直接呼叫同一個 `FreshnessPolicy`；決策點仍是唯一的 |
+| (3) 快取規模小 | Paging 的價值是內建 LoadState/retry/append 觸發（省工），不是記憶體視窗化 |
+| (4) 手寫較好測 | 官方 `paging-testing`（`TestPager`、`asSnapshot()`）足以測 PagingSource；RemoteMediator 用 Robolectric + in-memory Room 直接呼叫 `load()` 測 |
 
-**取捨**：
+**Wayne 的決定**：「改用Paging3」。
+
+**Opus 的行動**：據此修訂 v2 PLAN.md，分頁改為 Paging 3 + RemoteMediator（保留 keyset 游標於 APPEND）。
+
+**實作過程**：Sonnet 在 Step 5 後暫停、awaiting v2 commit（b4a338e），隨後照新計畫繼續 Step 6–13。
+
+**v2 取捨**：
 - **優**：內建 append 觸發與 prefetch；`LoadState`（loading/error/end）；`retry()`/`refresh()`；記憶體視窗化；與 Room invalidation 整合；官方測試工具
 - **劣**：Feed 畫面有兩個狀態來源（UiState + LoadState）；`insertSeparators` 需 DB 維護 `sortIndex`；RemoteMediator 邊界情況複雜；REFRESH 清空不適用「重疊合併」
 

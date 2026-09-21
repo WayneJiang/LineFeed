@@ -140,19 +140,26 @@ Compose UI（LazyColumn + LazyPagingItems）
 
 ### 工作拆解
 
-16 個 commit：
+逐步提交，每個 commit 可獨立 build 且測試全綠（完整歷史見 `git log`）：
 
-**Step 1-2（基礎建設）**：bootstrap gradle wrapper & convention plugins、GitHub Actions CI
+| Step | Commit | 內容 |
+|---|---|---|
+| 1 | `0511843` build: bootstrap gradle wrapper, version catalog and convention plugins | Gradle 9.7.1 wrapper、version catalog、`build-logic` 6 個 convention plugin、8 個 module 骨架、Hilt Application + MainActivity |
+| 2 | `3f47897` ci: add github actions workflow for build and unit tests | GitHub Actions：push/PR 觸發 build + 單元測試 |
+| 3 | `1a9f4ff` feat(domain): add domain models, freshness policy and refresh triggers | `core:domain`：模型、`FreshnessPolicy`、`TtlConfig`、`AppClock`、`NetworkMonitor`、`SingleFlight`、`suspendRunCatching`、repository interface；`core:testing` 的 Fake |
+| 4 | `7e5d97f` feat(data): add retrofit clients and dtos for spaceflight, open-meteo and dummyjson | 三個 Retrofit API、DTO、RemoteDataSource、錯誤轉換；MockWebServer + JSON fixture 測解析 |
+| 5 | `27b6df8` feat(data): add room database for feed cache, bookmarks and sync metadata | Room entity/DAO（含 `sortIndex`、`remote_keys`、bookmarks、sync_metadata）、mapper、schema 匯出 |
+| 6 | `a77912f` feat(data): add paging 3 remote mediator with keyset append for articles | `ArticleRemoteMediator`：`initialize()` 走 FreshnessPolicy、REFRESH 清空重建、APPEND keyset 游標 + 去重 |
+| 7 | `e43b7c8` feat(data): add weather, service and bookmark repositories with refresh coordinator | 天氣/服務卡/收藏 repository、`DefaultFeedRefresher` 刷新協調器、`ConnectivityNetworkMonitor`、回前景觸發接線 |
+| 8 | `d726498` feat(designsystem): add material 3 theme with dark mode and shared state components | Material 3 淺色/深色主題、共用元件（FullScreenMessage、OfflineBanner、FeedImage、SourceChip、Skeleton、`RelativeTimeFormatter`） |
+| 9 | `29ee21f` feat(feed): add paged heterogeneous feed with weather hero and service card separators | Reading 頁：天氣 hero、首篇大圖卡、文章列、服務卡穿插、下拉重整、分頁 footer、Coil 設定、底部導覽；模擬器驗證時抓到並修正 Manifest 路徑與 FeedImage 兩個 bug |
+| 10 | `bc7da12` feat(detail): add article detail screen with bookmark toggle | 詳情頁、收藏切換、Feed → Detail 導覽 |
+| 11 | `d548a7a` feat(saved): add saved articles screen with offline banner | Saved 頁、離線 banner、Saved → Detail 導覽 |
+| 12 | `c0fc876` feat(data): persist bookmark images for offline reading | 收藏時把圖片下載到 `filesDir`（tmp → rename）、取消收藏刪檔、失敗重試；UI 優先讀本機圖片 |
+| 13 | `ff56dc9` feat(saved): add offline search over saved articles | Saved 頁本機搜尋（debounce、LIKE 萬用字元跳脫、無結果空狀態）+ 列表小動畫 |
 
-**Step 3-7（資料層）**：core:domain models → Retrofit/Room entities/DAO → RemoteMediator → repositories & DI
-
-**Step 8-11（UI 層）**：Material 3 theme → Feed 異質分頁 → Detail → Saved + 離線 banner
-
-**Step 12-13（補充）**：收藏圖片離線保存 → Saved 頁離線搜尋（debounce）
-
-**Step 14（文件）**：此三份檔案
-
-**另**：Step 9 模擬器驗證發現 Manifest/FeedImage bug 並修正；主控 review 截圖時發現多日天氣預報缺口，派 Sonnet 補上 commit e475bdd
+**計畫外的後續 commit**：
+- `e475bdd` feat(feed): show multi-day forecast row in weather hero card（主控看截圖 review 發現天氣卡缺多日預報後補上）
 
 ### 為什麼這個順序？
 
@@ -163,16 +170,22 @@ Compose UI（LazyColumn + LazyPagingItems）
 3. **must-have 與架構優先於 nice-to-have**：異質 feed 與離線機制是核心，搜尋/動畫其次
 4. **每個 commit 都可獨立 build 且測試全綠**：減少跨 commit 的隱藏依賴
 
-### 中途架構變更（Paging 3）
+### PLAN v1 → v2 差異
 
-初版計畫（Opus v1）採手寫 keyset 分頁，理由四點。Wayne 質疑「為什麼不用 Paging 3」，主控評估各理由並提出回應：
+| 面向 | v1（手寫 keyset 分頁） | v2（Paging 3 + RemoteMediator） |
+|---|---|---|
+| 分頁機制 | 自寫 `loadNextPage()`；VM 持有 `AppendState`（Idle/Loading/Error/EndReached/Offline）狀態機；`snapshotFlow` 偵測接近底部觸發 | Paging 3 內建 append 觸發、prefetch、`LoadState`、`retry()` |
+| 下一頁游標 | `published_at_lte` + id 去重 | 保留不變，移到 RemoteMediator 的 APPEND；游標存在 `remote_keys` 表 |
+| 異質混排 | 純函式 `FeedAssembler` 把天氣/文章/服務卡組成一個 List | 天氣 hero 是 LazyColumn 的獨立 `item {}`（不進 PagingData）；服務卡用 `insertSeparators` 依 `sortIndex` 規則穿插（`ServiceCardSlots`） |
+| Room schema | `feed_articles` | `feed_articles` 加遞增 `sortIndex`（unique index）+ 新增 `remote_keys` 表（每個 feed 一列） |
+| 新鮮度整合 | 刷新協調器統一決定所有來源 | 同一個 `FreshnessPolicy`，但文章冷啟動改由 `RemoteMediator.initialize()` 判斷 SKIP/LAUNCH；回前景時協調器發出刷新請求，Feed 可見時才呼叫 `refresh()` |
+| 文章刷新策略 | 「有重疊就合併」保留已載入舊頁 | REFRESH 成功後在 transaction 內清空重建、`sortIndex` 從 0 重排；「保留舊頁」移到延後清單 |
+| ViewModel 狀態 | 單一 `StateFlow<UiState>` | 非分頁狀態仍是 `StateFlow<FeedUiState>`；文章+服務卡另以 `Flow<PagingData<FeedItem>>` 暴露 |
+| UI 狀態推導 | `deriveFullScreenState` 從 AppendState 推導 | 純函式 `deriveFeedScreenState(CombinedLoadStates, itemCount, isOffline)` |
+| 測試 | 手寫分頁狀態機、`FeedAssemblerTest` | `ArticleRemoteMediatorTest`、PagingSource 用 `TestPager`、VM/Repository 用 `asSnapshot()`、`ServiceCardSlotsTest`、`DeriveFeedScreenStateTest` |
+| Commit 計畫 | Step 6 `implement offline-first repositories with keyset pagination`、Step 7 `refresh coordinator and network monitor` | Step 6 `add paging 3 remote mediator with keyset append`、Step 7 `weather, service and bookmark repositories with refresh coordinator`；Step 1–5 不變 |
 
-- 天氣 hero 不必進 `PagingData`、服務卡用 `sortIndex` 規則插入
-- `initialize()` 直接呼叫 `FreshnessPolicy`，決策點仍唯一
-- Paging 內建 LoadState/retry/append 觸發（省工）
-- 官方 `paging-testing` 覆蓋可測性
-
-Wayne 同意改用 Paging 3。Opus 修訂 v2 PLAN.md，Sonnet 在 Step 5 後暫停、awaiting v2 commit，隨後照新計畫繼續 Step 6-13。
+v1 不採用 Paging 3 的完整理由與推翻過程見 DECISIONS.md §8；v2 修訂紀錄見 docs/PLAN.md 開頭。
 
 ### 砍掉的項目
 
