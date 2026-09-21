@@ -27,6 +27,7 @@
     <string name="feed_weather_unavailable">Weather is temporarily unavailable</string>
     <string name="feed_weather_updated_ago">Updated %1$s</string>
     <string name="feed_weather_high_low">H:%1$d° L:%2$d°</string>
+    <string name="feed_weather_forecast_day_content_description">%1$s: %2$s, high %3$d°</string>
 
     <string name="feed_service_cta_content_description">Open %1$s</string>
     <string name="feed_pull_to_refresh_content_description">Refresh feed</string>
