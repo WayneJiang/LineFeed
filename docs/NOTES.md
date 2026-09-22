@@ -361,9 +361,12 @@
      official 的 slot API），問題徹底消失。用 `Log.e` 暫時加在 `FeedImage` 裡印出
      `model`/`state` 才定位到「印一次就不再印」→ 該 composable 沒有隨真正的請求狀態重組——
      這個線索指向「讀狀態的物件」跟「顯示圖片的物件」根本是兩個不同的 Coil request。
-  3. **`linefeed.db` 版本殘留問題**：模擬器上曾經因為先前失敗的啟動流程留下舊版本 schema 的
-     DB 檔案（`Room` 丟 `A migration from 4 to 1 was required but not found`），`adb uninstall`
-     重裝後消失——與程式碼本身無關，記錄是因為這是本機模擬器驗證的操作細節，不是要修的 bug。
+  3. **`linefeed.db` 版本殘留問題**：模擬器上 `Room` 丟 `A migration from 4 to 1 was required
+     but not found`。原因是該模擬器在本作業開始前（firstInstallTime 2026-09-18）就裝過同
+     applicationId（`com.waynejiang.linefeed`）、同 DB 名稱的舊 App，其 schema version 為 4；
+     覆蓋安裝保留了舊資料，而本專案的 `LineFeedDatabase` 一直是 version 1，Room 遇到降版 4→1
+     而 crash。（原先記為「先前失敗的啟動流程留下」是錯誤歸因，失敗的啟動不會產生 version 4。）
+     `adb uninstall` 後重裝即恢復——與本專案程式碼無關，屬本機裝置的操作細節。
 
   兩個修正後，實機驗證通過：冷啟動載入真實 API 資料（Spaceflight/Open-Meteo/DummyJSON）、
   weather hero 卡（含「Updated Xm ago」）、TopStory/ArticleRow/ServiceCard 正確穿插、收藏
