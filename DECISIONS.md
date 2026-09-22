@@ -198,12 +198,10 @@ Wayne 審閱 v1 計畫後在對話中提問：「為什麼不使用page3、Okhtt
 
 主控（Claude Code）據此評估各理由——結論是四個理由都不會讓 Paging 3「做不出來」，只有理由 1 會多一些工作：
 
-| v1 理由 | 改用 Paging 3 的回應 |
-|---|---|
-| (1) 異質混排難 | 天氣 hero 不必進 PagingData（LazyColumn 先放獨立 `item {}`）；服務卡位置由 mediator 寫入時指派遞增 `sortIndex` 決定，規則抽成純函式 `ServiceCardSlots.slotBefore()` 即可單獨測試 |
-| (2) 與協調器重複 | 讓 `initialize()` 直接呼叫同一個 `FreshnessPolicy`；決策點仍是唯一的 |
-| (3) 快取規模小 | Paging 的價值是內建 LoadState/retry/append 觸發（省工），不是記憶體視窗化 |
-| (4) 手寫較好測 | 官方 `paging-testing`（`TestPager`、`asSnapshot()`）足以測 PagingSource；RemoteMediator 用 Robolectric + in-memory Room 直接呼叫 `load()` 測 |
+- **(1) 異質混排難**：天氣 hero 不必進 PagingData（LazyColumn 先放獨立 `item {}`）；服務卡位置由 mediator 寫入時指派遞增 `sortIndex` 決定，規則抽成純函式 `ServiceCardSlots.slotBefore()` 即可單獨測試
+- **(2) 與協調器重複**：讓 `initialize()` 直接呼叫同一個 `FreshnessPolicy`；決策點仍是唯一的
+- **(3) 快取規模小**：Paging 的價值是內建 LoadState/retry/append 觸發（省工），不是記憶體視窗化
+- **(4) 手寫較好測**：官方 `paging-testing`（`TestPager`、`asSnapshot()`）足以測 PagingSource；RemoteMediator 用 Robolectric + in-memory Room 直接呼叫 `load()` 測
 
 **Wayne 的決定**：「改用Paging3」。
 

@@ -23,21 +23,19 @@ Android 內容聚合應用，整合異質資訊流（文章、天氣、服務卡
 
 ## 功能清單
 
-| 功能 | 必做/加分 | 狀態 | 備註 |
-|---|---|---|---|
-| Feed 分頁載入 | 必做 | ✅ 完成 | Spaceflight News API + Paging 3 RemoteMediator |
-| 詳情頁 | 必做 | ✅ 完成 | 標題、摘要、來源、時間、作者、收藏按鈕 |
-| 收藏/取消收藏（離線可讀） | 必做 | ✅ 完成 | Room 快照 + 本機圖片永續化 |
-| 已收藏清單頁 | 必做 | ✅ 完成 | 本地搜尋過濾 |
-| 異質 Feed（至少 2 種來源） | 必做 | ✅ 完成 | 天氣 hero 卡 (Open-Meteo) + 服務卡穿插 (DummyJSON) |
-| 新鮮度策略 | 必做 | ✅ 完成 | 見下節詳述 |
-| 所有 UI 狀態（載入/空/錯誤/離線） | 必做 | ✅ 完成 | 整頁與底部 footer 狀態完整 |
-| 測試涵蓋快取與新鮮度邏輯 | 加分 | ✅ 完成 | 170 測試全綠 |
-| 多 module 結構 | 加分 | ✅ 完成 | 8 module + build-logic |
-| CI (GitHub Actions) | 加分 | ✅ 完成 | push/PR 自動 build + test |
-| Dark theme | 加分 | ✅ 完成 | Material 3 light/dark |
-| 本地搜尋（Saved 頁） | 加分 | ✅ 完成 | 含防止 LIKE 萬用字元注入 |
-| 多日天氣預報 | 加分 | ✅ 完成 | 5 日後預報顯示 |
+- ✅ 完成 **Feed 分頁載入**（必做）：Spaceflight News API + Paging 3 RemoteMediator
+- ✅ 完成 **詳情頁**（必做）：標題、摘要、來源、時間、作者、收藏按鈕
+- ✅ 完成 **收藏/取消收藏（離線可讀）**（必做）：Room 快照 + 本機圖片永續化
+- ✅ 完成 **已收藏清單頁**（必做）：本地搜尋過濾
+- ✅ 完成 **異質 Feed（至少 2 種來源）**（必做）：天氣 hero 卡 (Open-Meteo) + 服務卡穿插 (DummyJSON)
+- ✅ 完成 **新鮮度策略**（必做）：見下節詳述
+- ✅ 完成 **所有 UI 狀態（載入/空/錯誤/離線）**（必做）：整頁與底部 footer 狀態完整
+- ✅ 完成 **測試涵蓋快取與新鮮度邏輯**（加分）：170 測試全綠
+- ✅ 完成 **多 module 結構**（加分）：8 module + build-logic
+- ✅ 完成 **CI (GitHub Actions)**（加分）：push/PR 自動 build + test
+- ✅ 完成 **Dark theme**（加分）：Material 3 light/dark
+- ✅ 完成 **本地搜尋（Saved 頁）**（加分）：含防止 LIKE 萬用字元注入
+- ✅ 完成 **多日天氣預報**（加分）：5 日後預報顯示
 
 ## 架構總覽
 
@@ -92,11 +90,17 @@ Compose UI（LazyColumn + LazyPagingItems）
 
 ### 定義「新鮮」
 
-| 來源 | TTL (Wi-Fi / 行動網路) | Outdated 標示 | 理由 |
-|---|---|---|---|
-| **天氣** (Open-Meteo) | 15 分 / 30 分 | 3 小時 | API 本身 15 分更新；即時性最高 |
-| **文章** (Spaceflight, 第 1 頁) | 20 分 / 60 分 | 12 小時 | 約每小時 0.5 篇；API 宣告 max-age=600 |
-| **服務卡** (DummyJSON) | 12 小時 / 24 小時 | — | 推廣內容以天為單位變動 |
+- **天氣** (Open-Meteo)
+  - TTL (Wi-Fi / 行動網路)：15 分 / 30 分
+  - Outdated 標示：3 小時
+  - 理由：API 本身 15 分更新；即時性最高
+- **文章** (Spaceflight, 第 1 頁)
+  - TTL (Wi-Fi / 行動網路)：20 分 / 60 分
+  - Outdated 標示：12 小時
+  - 理由：約每小時 0.5 篇；API 宣告 max-age=600
+- **服務卡** (DummyJSON)
+  - TTL (Wi-Fi / 行動網路)：12 小時 / 24 小時
+  - 理由：推廣內容以天為單位變動
 
 **關鍵特性**：
 - **Metered 網路 TTL 更長**（省流量），unmetered 更短（便宜，換新鮮度）
@@ -106,13 +110,11 @@ Compose UI（LazyColumn + LazyPagingItems）
 
 ### 觸發時機
 
-| 情景 | 行為 |
-|---|---|
-| **冷啟動** (COLD_START) | 顯示快取；逐來源判斷 TTL → 有過期則背景刷新 |
-| **回前景** (FOREGROUND) | 同上 |
-| **網路復原** (NETWORK_RESTORED) | 同上；Saved 頁回 Reading 頁時重試待機下載 |
-| **下拉重整** (USER_PULL) | **忽略 TTL、全部刷新**（即使 metered） |
-| **背景中** | 不刷新（無 WorkManager） |
+- **冷啟動** (COLD_START)：顯示快取；逐來源判斷 TTL → 有過期則背景刷新
+- **回前景** (FOREGROUND)：同上
+- **網路復原** (NETWORK_RESTORED)：同上；Saved 頁回 Reading 頁時重試待機下載
+- **下拉重整** (USER_PULL)：**忽略 TTL、全部刷新**（即使 metered）
+- **背景中**：不刷新（無 WorkManager）
 
 ### 文章 Paging 3 整合
 
@@ -142,21 +144,32 @@ Compose UI（LazyColumn + LazyPagingItems）
 
 逐步提交，每個 commit 可獨立 build 且測試全綠（完整歷史見 `git log`）：
 
-| Step | Commit | 內容 |
-|---|---|---|
-| 1 | `0511843` build: bootstrap gradle wrapper, version catalog and convention plugins | Gradle 9.7.1 wrapper、version catalog、`build-logic` 6 個 convention plugin、8 個 module 骨架、Hilt Application + MainActivity |
-| 2 | `3f47897` ci: add github actions workflow for build and unit tests | GitHub Actions：push/PR 觸發 build + 單元測試 |
-| 3 | `1a9f4ff` feat(domain): add domain models, freshness policy and refresh triggers | `core:domain`：模型、`FreshnessPolicy`、`TtlConfig`、`AppClock`、`NetworkMonitor`、`SingleFlight`、`suspendRunCatching`、repository interface；`core:testing` 的 Fake |
-| 4 | `7e5d97f` feat(data): add retrofit clients and dtos for spaceflight, open-meteo and dummyjson | 三個 Retrofit API、DTO、RemoteDataSource、錯誤轉換；MockWebServer + JSON fixture 測解析 |
-| 5 | `27b6df8` feat(data): add room database for feed cache, bookmarks and sync metadata | Room entity/DAO（含 `sortIndex`、`remote_keys`、bookmarks、sync_metadata）、mapper、schema 匯出 |
-| 6 | `a77912f` feat(data): add paging 3 remote mediator with keyset append for articles | `ArticleRemoteMediator`：`initialize()` 走 FreshnessPolicy、REFRESH 清空重建、APPEND keyset 游標 + 去重 |
-| 7 | `e43b7c8` feat(data): add weather, service and bookmark repositories with refresh coordinator | 天氣/服務卡/收藏 repository、`DefaultFeedRefresher` 刷新協調器、`ConnectivityNetworkMonitor`、回前景觸發接線 |
-| 8 | `d726498` feat(designsystem): add material 3 theme with dark mode and shared state components | Material 3 淺色/深色主題、共用元件（FullScreenMessage、OfflineBanner、FeedImage、SourceChip、Skeleton、`RelativeTimeFormatter`） |
-| 9 | `29ee21f` feat(feed): add paged heterogeneous feed with weather hero and service card separators | Reading 頁：天氣 hero、首篇大圖卡、文章列、服務卡穿插、下拉重整、分頁 footer、Coil 設定、底部導覽；模擬器驗證時抓到並修正 Manifest 路徑與 FeedImage 兩個 bug |
-| 10 | `bc7da12` feat(detail): add article detail screen with bookmark toggle | 詳情頁、收藏切換、Feed → Detail 導覽 |
-| 11 | `d548a7a` feat(saved): add saved articles screen with offline banner | Saved 頁、離線 banner、Saved → Detail 導覽 |
-| 12 | `c0fc876` feat(data): persist bookmark images for offline reading | 收藏時把圖片下載到 `filesDir`（tmp → rename）、取消收藏刪檔、失敗重試；UI 優先讀本機圖片 |
-| 13 | `ff56dc9` feat(saved): add offline search over saved articles | Saved 頁本機搜尋（debounce、LIKE 萬用字元跳脫、無結果空狀態）+ 列表小動畫 |
+- **Step 1** — `0511843` build: bootstrap gradle wrapper, version catalog and convention plugins\
+  Gradle 9.7.1 wrapper、version catalog、`build-logic` 6 個 convention plugin、8 個 module 骨架、Hilt Application + MainActivity
+- **Step 2** — `3f47897` ci: add github actions workflow for build and unit tests\
+  GitHub Actions：push/PR 觸發 build + 單元測試
+- **Step 3** — `1a9f4ff` feat(domain): add domain models, freshness policy and refresh triggers\
+  `core:domain`：模型、`FreshnessPolicy`、`TtlConfig`、`AppClock`、`NetworkMonitor`、`SingleFlight`、`suspendRunCatching`、repository interface；`core:testing` 的 Fake
+- **Step 4** — `7e5d97f` feat(data): add retrofit clients and dtos for spaceflight, open-meteo and dummyjson\
+  三個 Retrofit API、DTO、RemoteDataSource、錯誤轉換；MockWebServer + JSON fixture 測解析
+- **Step 5** — `27b6df8` feat(data): add room database for feed cache, bookmarks and sync metadata\
+  Room entity/DAO（含 `sortIndex`、`remote_keys`、bookmarks、sync_metadata）、mapper、schema 匯出
+- **Step 6** — `a77912f` feat(data): add paging 3 remote mediator with keyset append for articles\
+  `ArticleRemoteMediator`：`initialize()` 走 FreshnessPolicy、REFRESH 清空重建、APPEND keyset 游標 + 去重
+- **Step 7** — `e43b7c8` feat(data): add weather, service and bookmark repositories with refresh coordinator\
+  天氣/服務卡/收藏 repository、`DefaultFeedRefresher` 刷新協調器、`ConnectivityNetworkMonitor`、回前景觸發接線
+- **Step 8** — `d726498` feat(designsystem): add material 3 theme with dark mode and shared state components\
+  Material 3 淺色/深色主題、共用元件（FullScreenMessage、OfflineBanner、FeedImage、SourceChip、Skeleton、`RelativeTimeFormatter`）
+- **Step 9** — `29ee21f` feat(feed): add paged heterogeneous feed with weather hero and service card separators\
+  Reading 頁：天氣 hero、首篇大圖卡、文章列、服務卡穿插、下拉重整、分頁 footer、Coil 設定、底部導覽；模擬器驗證時抓到並修正 Manifest 路徑與 FeedImage 兩個 bug
+- **Step 10** — `bc7da12` feat(detail): add article detail screen with bookmark toggle\
+  詳情頁、收藏切換、Feed → Detail 導覽
+- **Step 11** — `d548a7a` feat(saved): add saved articles screen with offline banner\
+  Saved 頁、離線 banner、Saved → Detail 導覽
+- **Step 12** — `c0fc876` feat(data): persist bookmark images for offline reading\
+  收藏時把圖片下載到 `filesDir`（tmp → rename）、取消收藏刪檔、失敗重試；UI 優先讀本機圖片
+- **Step 13** — `ff56dc9` feat(saved): add offline search over saved articles\
+  Saved 頁本機搜尋（debounce、LIKE 萬用字元跳脫、無結果空狀態）+ 列表小動畫
 
 **計畫外的後續 commit**：
 - `e475bdd` feat(feed): show multi-day forecast row in weather hero card（主控看截圖 review 發現天氣卡缺多日預報後補上）
@@ -172,31 +185,47 @@ Compose UI（LazyColumn + LazyPagingItems）
 
 ### PLAN v1 → v2 差異
 
-| 面向 | v1（手寫 keyset 分頁） | v2（Paging 3 + RemoteMediator） |
-|---|---|---|
-| 分頁機制 | 自寫 `loadNextPage()`；VM 持有 `AppendState`（Idle/Loading/Error/EndReached/Offline）狀態機；`snapshotFlow` 偵測接近底部觸發 | Paging 3 內建 append 觸發、prefetch、`LoadState`、`retry()` |
-| 下一頁游標 | `published_at_lte` + id 去重 | 保留不變，移到 RemoteMediator 的 APPEND；游標存在 `remote_keys` 表 |
-| 異質混排 | 純函式 `FeedAssembler` 把天氣/文章/服務卡組成一個 List | 天氣 hero 是 LazyColumn 的獨立 `item {}`（不進 PagingData）；服務卡用 `insertSeparators` 依 `sortIndex` 規則穿插（`ServiceCardSlots`） |
-| Room schema | `feed_articles` | `feed_articles` 加遞增 `sortIndex`（unique index）+ 新增 `remote_keys` 表（每個 feed 一列） |
-| 新鮮度整合 | 刷新協調器統一決定所有來源 | 同一個 `FreshnessPolicy`，但文章冷啟動改由 `RemoteMediator.initialize()` 判斷 SKIP/LAUNCH；回前景時協調器發出刷新請求，Feed 可見時才呼叫 `refresh()` |
-| 文章刷新策略 | 「有重疊就合併」保留已載入舊頁 | REFRESH 成功後在 transaction 內清空重建、`sortIndex` 從 0 重排；「保留舊頁」移到延後清單 |
-| ViewModel 狀態 | 單一 `StateFlow<UiState>` | 非分頁狀態仍是 `StateFlow<FeedUiState>`；文章+服務卡另以 `Flow<PagingData<FeedItem>>` 暴露 |
-| UI 狀態推導 | `deriveFullScreenState` 從 AppendState 推導 | 純函式 `deriveFeedScreenState(CombinedLoadStates, itemCount, isOffline)` |
-| 測試 | 手寫分頁狀態機、`FeedAssemblerTest` | `ArticleRemoteMediatorTest`、PagingSource 用 `TestPager`、VM/Repository 用 `asSnapshot()`、`ServiceCardSlotsTest`、`DeriveFeedScreenStateTest` |
-| Commit 計畫 | Step 6 `implement offline-first repositories with keyset pagination`、Step 7 `refresh coordinator and network monitor` | Step 6 `add paging 3 remote mediator with keyset append`、Step 7 `weather, service and bookmark repositories with refresh coordinator`；Step 1–5 不變 |
+- **分頁機制**
+  - v1（手寫 keyset 分頁）：自寫 `loadNextPage()`；VM 持有 `AppendState`（Idle/Loading/Error/EndReached/Offline）狀態機；`snapshotFlow` 偵測接近底部觸發
+  - v2（Paging 3 + RemoteMediator）：Paging 3 內建 append 觸發、prefetch、`LoadState`、`retry()`
+- **下一頁游標**
+  - v1（手寫 keyset 分頁）：`published_at_lte` + id 去重
+  - v2（Paging 3 + RemoteMediator）：保留不變，移到 RemoteMediator 的 APPEND；游標存在 `remote_keys` 表
+- **異質混排**
+  - v1（手寫 keyset 分頁）：純函式 `FeedAssembler` 把天氣/文章/服務卡組成一個 List
+  - v2（Paging 3 + RemoteMediator）：天氣 hero 是 LazyColumn 的獨立 `item {}`（不進 PagingData）；服務卡用 `insertSeparators` 依 `sortIndex` 規則穿插（`ServiceCardSlots`）
+- **Room schema**
+  - v1（手寫 keyset 分頁）：`feed_articles`
+  - v2（Paging 3 + RemoteMediator）：`feed_articles` 加遞增 `sortIndex`（unique index）+ 新增 `remote_keys` 表（每個 feed 一列）
+- **新鮮度整合**
+  - v1（手寫 keyset 分頁）：刷新協調器統一決定所有來源
+  - v2（Paging 3 + RemoteMediator）：同一個 `FreshnessPolicy`，但文章冷啟動改由 `RemoteMediator.initialize()` 判斷 SKIP/LAUNCH；回前景時協調器發出刷新請求，Feed 可見時才呼叫 `refresh()`
+- **文章刷新策略**
+  - v1（手寫 keyset 分頁）：「有重疊就合併」保留已載入舊頁
+  - v2（Paging 3 + RemoteMediator）：REFRESH 成功後在 transaction 內清空重建、`sortIndex` 從 0 重排；「保留舊頁」移到延後清單
+- **ViewModel 狀態**
+  - v1（手寫 keyset 分頁）：單一 `StateFlow<UiState>`
+  - v2（Paging 3 + RemoteMediator）：非分頁狀態仍是 `StateFlow<FeedUiState>`；文章+服務卡另以 `Flow<PagingData<FeedItem>>` 暴露
+- **UI 狀態推導**
+  - v1（手寫 keyset 分頁）：`deriveFullScreenState` 從 AppendState 推導
+  - v2（Paging 3 + RemoteMediator）：純函式 `deriveFeedScreenState(CombinedLoadStates, itemCount, isOffline)`
+- **測試**
+  - v1（手寫 keyset 分頁）：手寫分頁狀態機、`FeedAssemblerTest`
+  - v2（Paging 3 + RemoteMediator）：`ArticleRemoteMediatorTest`、PagingSource 用 `TestPager`、VM/Repository 用 `asSnapshot()`、`ServiceCardSlotsTest`、`DeriveFeedScreenStateTest`
+- **Commit 計畫**
+  - v1（手寫 keyset 分頁）：Step 6 `implement offline-first repositories with keyset pagination`、Step 7 `refresh coordinator and network monitor`
+  - v2（Paging 3 + RemoteMediator）：Step 6 `add paging 3 remote mediator with keyset append`、Step 7 `weather, service and bookmark repositories with refresh coordinator`；Step 1–5 不變
 
 v1 不採用 Paging 3 的完整理由與推翻過程見 DECISIONS.md §8；v2 修訂紀錄見 docs/PLAN.md 開頭。
 
 ### 砍掉的項目
 
-| 項目 | 理由 |
-|---|---|
-| **電影卡 (TMDB)** | 需要 API key → 面試官 clone 不能直接跑 |
-| **背景定期同步** | 前景 SWR 已足；背景同步浪費流量 & 電量 |
-| **定位的天氣** | 定位權限流程與新鮮度主題無關 |
-| **遠端搜尋** | 選本地過濾（離線可用） |
-| **Compose UI 測試** | UI 狀態由 ViewModel 單元測試覆蓋 |
-| **漢堡選單** | 無實際內容可放 |
+- **電影卡 (TMDB)**：需要 API key → 面試官 clone 不能直接跑
+- **背景定期同步**：前景 SWR 已足；背景同步浪費流量 & 電量
+- **定位的天氣**：定位權限流程與新鮮度主題無關
+- **遠端搜尋**：選本地過濾（離線可用）
+- **Compose UI 測試**：UI 狀態由 ViewModel 單元測試覆蓋
+- **漢堡選單**：無實際內容可放
 
 ## AI 開發流程
 
@@ -247,14 +276,24 @@ Wayne (Human)
 
 ### 測試策略重點
 
-| 層級 | 策略 | 理由 |
-|---|---|---|
-| **Domain** | 純 JVM + 純函式測試 | Freshness、Trigger 無副作用 → 快速驗證 |
-| **DAO** | Robolectric (SDK 35) + in-memory Room | 測 Paging + bookmark invalidation |
-| **RemoteMediator** | Robolectric + FakeClock + FakeNetworkMonitor | 驗證 initialize()/REFRESH/APPEND 決策 |
-| **Repository** | Fake remote + 真實 Room | 測新鮮度決策、邊界條件 |
-| **ViewModel** | Fake repo + StateFlow 驗證 | 測狀態機與生命週期 |
-| **Paging 轉換** | 純函式 + `flowOf()` + `asSnapshot()` | Separator 插入、key 唯一性 |
+- **Domain**
+  - 策略：純 JVM + 純函式測試
+  - 理由：Freshness、Trigger 無副作用 → 快速驗證
+- **DAO**
+  - 策略：Robolectric (SDK 35) + in-memory Room
+  - 理由：測 Paging + bookmark invalidation
+- **RemoteMediator**
+  - 策略：Robolectric + FakeClock + FakeNetworkMonitor
+  - 理由：驗證 initialize()/REFRESH/APPEND 決策
+- **Repository**
+  - 策略：Fake remote + 真實 Room
+  - 理由：測新鮮度決策、邊界條件
+- **ViewModel**
+  - 策略：Fake repo + StateFlow 驗證
+  - 理由：測狀態機與生命週期
+- **Paging 轉換**
+  - 策略：純函式 + `flowOf()` + `asSnapshot()`
+  - 理由：Separator 插入、key 唯一性
 
 ### 為何 SDK 35 而非 36？
 
@@ -269,27 +308,21 @@ NOTES.md Step 5：Robolectric 4.17 的 SDK 36 shadow 在 JDK 21 下 `Application
 
 ### 資料內容限制
 
-| 限制 | 原因 |
-|---|---|
-| **詳情頁無完整內文** | Spaceflight API 只提供 `summary` |
-| **文章列表無遠端搜尋** | 只實作本地過濾（離線可用） |
-| **縮圖尺寸單一** | Spaceflight 每篇圖只有一個尺寸 |
-| **相對時間用 US Locale** | 便於單元測試斷言格式 |
+- **詳情頁無完整內文**：Spaceflight API 只提供 `summary`
+- **文章列表無遠端搜尋**：只實作本地過濾（離線可用）
+- **縮圖尺寸單一**：Spaceflight 每篇圖只有一個尺寸
+- **相對時間用 US Locale**：便於單元測試斷言格式
 
 ### UI 與互動限制
 
-| 限制 | 理由 |
-|---|---|
-| **無 Undo 提示** | 好的 UX，但非必要 |
-| **天氣無定位** | 固定台北；定位權限流程與新鮮度主題無關 |
-| **服務卡穿插規則固定** | 依 `ServiceCardSlots(firstAfter=3, every=6)` 決定插入位置 |
+- **無 Undo 提示**：好的 UX，但非必要
+- **天氣無定位**：固定台北；定位權限流程與新鮮度主題無關
+- **服務卡穿插規則固定**：依 `ServiceCardSlots(firstAfter=3, every=6)` 決定插入位置
 
 ### 架構延後
 
-| 項目 | 何時適合 |
-|---|---|
-| **拆分 core:network / core:database** | 目前只有 1 個消費者（core:data）；等第 2 個消費者出現再拆（YAGNI） |
-| **DataStore metadata** | 目前 Room transaction 已保證 TTL 原子性；若需要多 DB 才考慮 |
+- **拆分 core:network / core:database**：目前只有 1 個消費者（core:data）；等第 2 個消費者出現再拆（YAGNI）
+- **DataStore metadata**：目前 Room transaction 已保證 TTL 原子性；若需要多 DB 才考慮
 
 ### 單元測試未涵蓋的情景
 
@@ -299,21 +332,19 @@ NOTES.md Step 5：Robolectric 4.17 的 SDK 36 shadow 在 JDK 21 下 `Application
 
 ## 技術棧總覽
 
-| 範疇 | 技術 | 版本 |
-|---|---|---|
-| **語言** | Kotlin | 2.4.20 |
-| **Build** | Gradle | 9.7.1 |
-| **AGP** | | 9.4.0 |
-| **UI** | Jetpack Compose + Material 3 | 2026.09.00 BOM |
-| **狀態** | StateFlow + UDF | — |
-| **DI** | Hilt + KSP | 2.60.1 / 2.3.12 |
-| **資料庫** | Room | 2.8.5 |
-| **網路** | Retrofit 3 + OkHttp 5 + kotlinx.serialization | 3.0.0 / 5.5.0 / 1.11.0 |
-| **分頁** | Paging 3 + RemoteMediator | 3.5.1 |
-| **圖片** | Coil 3 | 3.6.2 |
-| **並行** | Coroutines + Flow | 1.11.0 |
-| **測試** | JUnit 4 + Turbine + Robolectric + paging-testing | 4.13.2 / 1.2.1 / 4.17 / 3.5.1 |
-| **CI** | GitHub Actions | — |
+- **語言**：Kotlin（2.4.20）
+- **Build**：Gradle（9.7.1）
+- **AGP**：9.4.0
+- **UI**：Jetpack Compose + Material 3（2026.09.00 BOM）
+- **狀態**：StateFlow + UDF
+- **DI**：Hilt + KSP（2.60.1 / 2.3.12）
+- **資料庫**：Room（2.8.5）
+- **網路**：Retrofit 3 + OkHttp 5 + kotlinx.serialization（3.0.0 / 5.5.0 / 1.11.0）
+- **分頁**：Paging 3 + RemoteMediator（3.5.1）
+- **圖片**：Coil 3（3.6.2）
+- **並行**：Coroutines + Flow（1.11.0）
+- **測試**：JUnit 4 + Turbine + Robolectric + paging-testing（4.13.2 / 1.2.1 / 4.17 / 3.5.1）
+- **CI**：GitHub Actions
 
 ## 資料來源
 
