@@ -455,3 +455,58 @@
   為了安全起見**沒有**對這台裝置執行任何 `install`/`shell` 修改類指令（只讀了
   `getprop` 確認它是實體機就停手），因此 Step 13 的搜尋 UI/動畫沒有額外補模擬器截圖，
   邏輯正確性由上述新增的 ViewModel 測試涵蓋。
+
+## 修正 CI-only 的 flaky 測試：paging invalidation 與 bookmark 下載時序
+
+- **問題**：GitHub Actions（ubuntu，比本機慢）上 `:core:data:testDebugUnitTest` 會間歇性讓
+  `FeedArticleDaoTest`「bookmarking an article invalidates the paging source」與
+  `DefaultBookmarkRepositoryTest`「retryPendingImageDownloads does nothing when every bookmark
+  already has a local image」失敗，本機重跑兩者都穩定通過——是時序相關的 flaky，不是產品邏輯
+  錯誤。用 `room-paging-android:2.8.5`／`room-runtime-android:2.8.5` 的 sources jar 反編譯確認
+  了兩個各自獨立的根因，而不是靠猜測調時間。
+
+- **原因 1（PagingSource invalidation）**：`androidx.room.paging.CommonLimitOffsetImpl`
+  （`dao.pagingSource()` 實際回傳的 PagingSource 背後實作）在自己的 `init` block 用
+  `db.getCoroutineScope().launch { db.invalidationTracker.createFlow(*tables, false).collect {...} }`
+  註冊 InvalidationTracker observer——這是 fire-and-forget 的非同步 launch，`load()`／
+  `pager.refresh()` 完全不會等它跑完。這個 observer 真正跑到
+  `ObservedTableStates.onObserverAdded(...)` 之前，SQLite 端用來標記「這張表被改過」的
+  TRIGGER 根本還沒被建立（`TriggerBasedInvalidationTracker.syncTriggers()`）；如果
+  `bookmarkDao.upsert(...)` 在 trigger 建立前就完成，那次改動永遠不會被標記成 invalidated，
+  `pagingSource.invalid` 就永遠不會變 true。原本測試在 `pager.refresh()` 後只寫入一次、
+  靠 3 秒輪詢等結果，本機這個註冊窗口通常已經關上，CI 機器較慢／較忙時偶爾會撞到窗口還開著
+  的時間點。
+
+- **原因 2（bookmark 圖片下載）**：反編譯同時確認，Room 產生的一般 DAO 寫入方法（像
+  `bookmarkDao.upsert`/`updateLocalImagePath`）在寫入前後都會自動呼叫
+  `InvalidationTracker.sync()`／`refreshAsync()`（`androidx.room.util.DBUtil.internalPerform`），
+  跟 PagingSource 那種特殊的 fire-and-forget 註冊方式不同，本身沒有問題。真正的競態在
+  `DefaultBookmarkRepository.setBookmarked(true)`：它在 `@ApplicationScope`（測試裡是
+  `UnconfinedTestDispatcher`）上 `scope.launch { downloadImage(...) }`，這個 launch 只會熱切
+  執行到第一個「真的」跨執行緒的 suspend 點為止；`imageDownloader.download(...)` 本身沒有
+  suspend 點所以會同步跑完（`attemptedUrls` 一定會被同步寫入），但緊接著的
+  `bookmarkDao.findById(...)`／`updateLocalImagePath(...)` 是走 Room 真正的 `Dispatchers.IO`
+  （`RoomTestDatabase.createTestDatabase()` 刻意用真正的 IO context，見 Step 5 筆記），會把
+  剩下的工作丟到背景執行緒，這時 `setBookmarked()` 已經先回傳了。「retryPendingImageDownloads
+  does nothing...」在 `setBookmarked(true)` 後立刻 `attemptedUrls.clear()` 就呼叫
+  `retryPendingImageDownloads()`：如果背景那次寫入 `localImagePath` 還沒真的落地，
+  `pendingImageDownloads()` 仍會把這篇收藏當成「還沒下載」，於是又重下載一次、
+  `attemptedUrls` 又被寫進東西，斷言「應該是空的」就失敗。
+
+- **解法（只改測試，沒有動任何 production 程式碼）**：
+  - `FeedArticleDaoTest`：`InvalidationTracker.sync()` 是 room 模組的 internal API，測試這邊
+    沒有乾淨的方法可以直接等它跑完，用反射硬拿也不划算。改成在原本 3 秒的輪詢迴圈裡「重複
+    寫入」同一筆（`OnConflict` 語意下冪等的）bookmark，取代「只寫一次就死等」：因為每次 DAO
+    寫入都會自己呼叫一次 `InvalidationTracker.sync()`，只要 observer 已經註冊好，下一次重試
+    寫入自帶的 `sync()` 就會即時把 trigger 建起來，那次寫入本身就會被正確標記成 invalidated——
+    不用猜一個「夠長」的固定延遲，收斂速度取決於 observer 何時註冊完成，跟輪詢間隔無關。
+  - `DefaultBookmarkRepositoryTest`：新增 `awaitLocalImagePath()`，用
+    `repository.observeSavedArticle(id).first { it?.localImagePath != null }`（外層包
+    `withTimeout(3000)` 保底避免無限卡住）取代「呼叫完 setBookmarked 就直接讀一次」。
+    `observeSavedArticle` 背後是一般的 Room Flow 查詢（生成程式碼用
+    `androidx.room.coroutines.FlowBuilder.createFlow`），跟 PagingSource 不同，它在「開始
+    收集」時就會同步等 trigger 裝好才發出第一個值，所以拿它來等背景下載真正落地是可靠的，
+    不是又賭一次時序。除了原本就在 CI 上炸開的「retryPendingImageDownloads does nothing...」，
+    也一併修好了同一個 class 裡另外兩個「setBookmarked 後立刻讀 localImagePath」寫法相同、
+    有同樣競態但還沒不走運撞上 CI 時序窗口的測試（`successful download sets localImagePath to
+    a real file`、`unbookmarking deletes the previously downloaded image file`）。

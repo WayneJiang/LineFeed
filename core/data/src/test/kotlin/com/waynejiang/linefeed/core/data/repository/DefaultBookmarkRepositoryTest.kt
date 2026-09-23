@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,8 +32,14 @@ class DefaultBookmarkRepositoryTest {
     private lateinit var database: LineFeedDatabase
     private val clock = FakeClock()
     // Unconfined: `scope.launch { downloadImage(...) }` in DefaultBookmarkRepository runs eagerly,
-    // up to its first real suspension point, so a FakeImageDownloader with no gate completes
-    // synchronously and assertions right after setBookmarked() don't need advanceUntilIdle().
+    // up to its first *real* suspension point. `imageDownloader.download(...)` itself has no
+    // suspension when there's no gate, so `attemptedUrls` is always populated synchronously - but
+    // the DAO calls right after it (`bookmarkDao.findById`/`updateLocalImagePath`) dispatch onto a
+    // genuine background dispatcher (RoomTestDatabase's real Dispatchers.IO query context, not a
+    // test dispatcher), so THAT part keeps running on a background thread after setBookmarked()
+    // already returned. Tests that only check `attemptedUrls` right after setBookmarked() are fine;
+    // tests that check `localImagePath` (or that a later query no longer sees a pending download)
+    // must wait for that background write via awaitLocalImagePath() instead of asserting immediately.
     private val scope = CoroutineScope(UnconfinedTestDispatcher())
 
     private class FakeImageDownloader : ImageDownloader {
@@ -107,13 +114,21 @@ class DefaultBookmarkRepositoryTest {
         assertEquals(listOf(1L), repository.observeSaved(query = "100%").first().map { it.article.id })
     }
 
+    /**
+     * `setBookmarked(bookmarked = true)` returns as soon as the background download job hits its
+     * first real (non-test-dispatcher) suspension point - it does not wait for the job to finish
+     * writing `localImagePath`. Poll the saved article instead of reading it once, so this waits for
+     * that write instead of racing it.
+     */
+    private suspend fun awaitLocalImagePath(articleId: Long): String = withTimeout(3_000) {
+        repository.observeSavedArticle(articleId).first { it?.localImagePath != null }!!.localImagePath!!
+    }
+
     @Test
     fun `successful download sets localImagePath to a real file`() = runBlocking {
         repository.setBookmarked(TestData.article(id = 1, imageUrl = "https://example.com/1.jpg"), bookmarked = true)
 
-        val saved = repository.observeSavedArticle(1).first()
-        assertTrue(saved?.localImagePath != null)
-        assertTrue(File(saved!!.localImagePath!!).exists())
+        assertTrue(File(awaitLocalImagePath(1)).exists())
     }
 
     @Test
@@ -136,7 +151,7 @@ class DefaultBookmarkRepositoryTest {
     @Test
     fun `unbookmarking deletes the previously downloaded image file`() = runBlocking {
         repository.setBookmarked(TestData.article(id = 1, imageUrl = "https://example.com/1.jpg"), bookmarked = true)
-        val file = File(repository.observeSavedArticle(1).first()!!.localImagePath!!)
+        val file = File(awaitLocalImagePath(1))
         assertTrue(file.exists())
 
         repository.setBookmarked(TestData.article(id = 1), bookmarked = false)
@@ -172,6 +187,11 @@ class DefaultBookmarkRepositoryTest {
     @Test
     fun `retryPendingImageDownloads does nothing when every bookmark already has a local image`() = runBlocking {
         repository.setBookmarked(TestData.article(id = 1, imageUrl = "https://example.com/1.jpg"), bookmarked = true)
+        // Wait for the initial download's DB write to land before clearing: otherwise
+        // retryPendingImageDownloads() below can still see `localImagePath IS NULL` (the write is
+        // still in flight on a background dispatcher) and treat this bookmark as pending, downloading
+        // it again and re-populating attemptedUrls.
+        awaitLocalImagePath(1)
         imageDownloader.attemptedUrls.clear()
 
         repository.retryPendingImageDownloads()

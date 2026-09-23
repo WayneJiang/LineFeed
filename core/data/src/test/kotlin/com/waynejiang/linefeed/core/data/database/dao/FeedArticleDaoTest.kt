@@ -104,22 +104,35 @@ class FeedArticleDaoTest {
         pager.refresh()
         assertFalse(pagingSource.invalid)
 
-        database.bookmarkDao().upsert(
-            BookmarkEntity(
-                articleId = 1,
-                title = "t",
-                summary = "s",
-                newsSite = "n",
-                url = "u",
-                imageUrl = null,
-                localImagePath = null,
-                publishedAtMillis = 0,
-                authors = "",
-                savedAtMillis = 0,
-            ),
+        val bookmark = BookmarkEntity(
+            articleId = 1,
+            title = "t",
+            summary = "s",
+            newsSite = "n",
+            url = "u",
+            imageUrl = null,
+            localImagePath = null,
+            publishedAtMillis = 0,
+            authors = "",
+            savedAtMillis = 0,
         )
-
-        val becameInvalid = awaitTrue(timeoutMillis = 3000) { pagingSource.invalid }
+        // Room's generated PagingSource (androidx.room.paging.CommonLimitOffsetImpl, verified against
+        // the room-paging-android:2.8.5 sources jar) registers its InvalidationTracker observer - and
+        // syncs the SQLite triggers that back it - inside `db.getCoroutineScope().launch { ... }` in
+        // its own init block, i.e. asynchronously, the moment dao.pagingSource() is called above.
+        // There is no way to block on that registration from a test: it's driven by
+        // `InvalidationTracker.sync()`, which is internal to the room module. If a write reaches
+        // SQLite before the trigger exists, the change is simply never marked invalidated - a longer
+        // fixed delay before writing would just be guessing at a window that happens to be wider on
+        // CI. Instead, retry the (idempotent) upsert while polling pagingSource.invalid: every
+        // generated DAO write already calls InvalidationTracker.sync() itself right before its own
+        // transaction (see androidx.room.util.DBUtil.internalPerform), so whichever retry happens
+        // after the observer has registered is the one whose sync() installs the trigger and whose
+        // own transaction flips `invalid` - no product code changes needed.
+        val becameInvalid = awaitTrue(timeoutMillis = 3000) {
+            if (!pagingSource.invalid) database.bookmarkDao().upsert(bookmark)
+            pagingSource.invalid
+        }
         assertTrue("expected pagingSource to become invalid after a bookmark change", becameInvalid)
     }
 
@@ -147,7 +160,7 @@ class FeedArticleDaoTest {
         assertNull(dao.maxSortIndex())
     }
 
-    private suspend fun awaitTrue(timeoutMillis: Long, condition: () -> Boolean): Boolean {
+    private suspend fun awaitTrue(timeoutMillis: Long, condition: suspend () -> Boolean): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             if (condition()) return true
