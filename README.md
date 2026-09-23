@@ -324,6 +324,13 @@ NOTES.md Step 5：Robolectric 4.17 的 SDK 36 shadow 在 JDK 21 下 `Application
 - **拆分 core:network / core:database**：目前只有 1 個消費者（core:data）；等第 2 個消費者出現再拆（YAGNI）
 - **DataStore metadata**：目前 Room transaction 已保證 TTL 原子性；若需要多 DB 才考慮
 
+### 若有更多時間（設計已完成、未實作）
+
+- 設計筆記見 [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md)，由 Opus 撰寫，程式碼中沒有實作。
+- **「N 則新文章」pill**（約 3–4 小時）：使用者不在頂端時不做 REFRESH，只查伺服器第一頁算出 N 並顯示 pill；點 pill 或捲回頂端才真正刷新（因為 REFRESH 會清空重建，深處的閱讀位置無法保留）。
+- **依定位顯示天氣**（約 7–9 小時）：只要求 ACCESS_COARSE_LOCATION、LocationManagerCompat 不加 Play Services、位置移動超過 5 km 視為過期、完整處理拒絕/永久拒絕/定位關閉，取不到時退回台北並標示；需要 Room v1→v2 migration。
+- 若只能做一個，先做 pill（成本低、直接改善閱讀體驗）。
+
 ### 單元測試未涵蓋的情景
 
 - **實體手機端對端流程**（本作只用模擬器驗證核心資料流、導覽、offline/online 切換）
