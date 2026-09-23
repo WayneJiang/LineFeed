@@ -26,6 +26,12 @@
 
 6. **多日天氣預報補充**：主控 review 截圖時發現 WeatherHeroCard 只有今日 H/L。資料層已有 Weather.daily，Sonnet 補上 commit e475bdd 新增 forecast row。
 
+7. **首次 push 後 CI 失敗（本機全綠、CI 才暴露）**：第一次 push 到 GitHub 後 GitHub Actions 失敗兩次，由主控讀 CI log 定位：
+   - `android-actions/setup-android@v3` 預設安裝 `tools platform-tools`，舊的 `tools` 套件已不存在（`Failed to find package 'tools'`）→ 主控改為只裝 `platform-tools`（commit a3132f6）
+   - `core:data` 80 個測試中 2 個失敗（`FeedArticleDaoTest` 的 paging 失效測試、`DefaultBookmarkRepositoryTest` 的 retryPendingImageDownloads 測試），本機一直通過。主控判斷為時序問題，交給 Sonnet 修
+   - Sonnet 反編譯 Room 2.8.5 原始碼確認根因而非猜測：Room 的 PagingSource 在背景才註冊 InvalidationTracker 監聽，寫入若早於監聽就不會被偵測；收藏時背景下載完成後的 DB 寫入晚於 `setBookmarked()` 回傳。修法只改測試（在等待迴圈中重試冪等寫入、等待 localImagePath 出現），並順手修了同一類別中另外 2 個有相同隱患的測試（commit a444853）。修正後 CI 全綠
+   - 教訓：「本機全綠 ≠ CI 全綠」——測試不能依賴背景工作的完成時間。
+
 ## 接受、拒絕、重寫的決策
 
 **接受**：Opus 大部分架構決策（DI/Compose/Room/Retrofit）、Opus 在 PLAN §9 規劃的測試策略（層級化、Fake 優於 mock），Sonnet 照做但依實況調整（Robolectric SDK 35、Room 測試改用 Dispatchers.IO）、convention plugins 設計
@@ -35,6 +41,7 @@
 - TMDB → Spaceflight/Open-Meteo/DummyJSON（需 API key 問題）
 - FeedImage 實作（兩個請求 → SubcomposeAsyncImage）
 - Haiku 初稿（捏造內容很多）
+- CI 設定（setup-android 預設套件）與 2 個時序不穩的測試（見上 7）
 
 ## 誠實聲明
 
