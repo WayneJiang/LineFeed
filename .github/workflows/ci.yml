@@ -18,6 +18,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default "tools platform-tools" fails: the legacy "tools"
+          # package no longer exists in the SDK repository. AGP downloads the
+          # compileSdk platform and build-tools itself (licenses accepted above).
+          packages: platform-tools
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
